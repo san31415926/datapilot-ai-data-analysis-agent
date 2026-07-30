@@ -1,6 +1,6 @@
 # DataPilot：本地自然语言数据分析 Agent
 
-> 当前状态：已选题，已完成计划记录，尚未实现。
+> 当前状态：阶段 2 已完成，阶段 3 待开始；尚未接入数据分析和模型调用。
 
 ## 项目定位
 
@@ -60,4 +60,25 @@ DataPilot 是面向中文电商经营数据的本地自然语言分析工作台�
 
 ## 运行说明
 
-当前尚未实现，暂时不能提供可运行命令。实现阶段会补充独立依赖、Ollama 模型准备、Windows 启动命令、示例问题和测试命令。
+在项目目录中创建独立虚拟环境并安装依赖：
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+```
+
+启动阶段 2 工作台：
+
+```powershell
+.\.venv\Scripts\python.exe -m streamlit run app.py
+```
+
+运行测试：
+
+```powershell
+.\.venv\Scripts\python.exe -m unittest discover -s tests -v
+```
+
+阶段 2 已验证：依赖可以安装和导入，配置测试 3 项通过，Python 语法检查通过，Streamlit 健康检查返回 `200 ok`。当前页面只验证上传入口，不读取数据，也不调用 Ollama。
+
+已知待处理问题：当前 Windows 中文路径下，Plotly 5.24.1 调用 Kaleido 0.2.1 生成 PNG 时出现 Kaleido 启动错误；PNG 导出属于阶段 11，后续会单独处理并测试，不提前宣称已支持。
