@@ -1,6 +1,6 @@
 # DataPilot：本地自然语言数据分析 Agent
 
-> 当前状态：阶段 3 已完成，阶段 4 待开始；尚未接入数据读取服务和模型调用。
+> 当前状态：阶段 4 已完成，阶段 5 待开始；尚未接入数据质量检查和模型调用。
 
 ## 项目定位
 
@@ -77,7 +77,7 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
-启动阶段 2 工作台：
+启动阶段 4 工作台：
 
 ```powershell
 .\.venv\Scripts\python.exe -m streamlit run app.py
@@ -89,6 +89,6 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
 
-阶段 2 已验证：依赖可以安装和导入，配置测试 3 项通过，Python 语法检查通过，Streamlit 健康检查返回 `200 ok`。阶段 3 已验证：固定种子可复现，CSV/XLSX 内容一致，样例数据测试 3 项通过。当前页面仍只验证上传入口，不读取数据，也不调用 Ollama。
+阶段 2 已验证：依赖可以安装和导入，配置测试 3 项通过，Python 语法检查通过，Streamlit 健康检查返回 `200 ok`。阶段 3 已验证：固定种子可复现，CSV/XLSX 内容一致，样例数据测试 3 项通过。阶段 4 已验证：完整测试集 14 项通过，支持 UTF-8/GBK 类编码、CSV/XLSX、表头清洗、日期/数值/文本类型识别、原始值保留和转换失败行记录；页面加载错误只显示中文原因。当前仍不调用 Ollama。
 
 已知待处理问题：当前 Windows 中文路径下，Plotly 5.24.1 调用 Kaleido 0.2.1 生成 PNG 时出现 Kaleido 启动错误；PNG 导出属于阶段 11，后续会单独处理并测试，不提前宣称已支持。
