@@ -53,8 +53,8 @@ DataPilot 是面向中文电商经营数据的本地自然语言分析工作台�
 
 完整的阶段目标、文件产物、验收标准和禁止事项记录在：
 
-- [`docs/datapilot-project-plan.md`](../../docs/datapilot-project-plan.md)
-- [`docs/decision-log.md`](../../docs/decision-log.md)
+- [`DataPilot 项目严格执行计划`](https://github.com/san31415926/ai-application-portfolio-lab/blob/main/docs/datapilot-project-plan.md)
+- [`技术决策记录`](https://github.com/san31415926/ai-application-portfolio-lab/blob/main/docs/decision-log.md)
 
 开发顺序固定为：上游拆解 -> 项目骨架 -> 样例数据 -> 数据读取 -> 质量检查 -> SQL 安全 -> 工具 -> Ollama -> 结构化 Agent -> 报告和图表 -> 界面 -> 测试评估 -> 文档和面试复述。
 
