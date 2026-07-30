@@ -1,6 +1,6 @@
 # DataPilot：本地自然语言数据分析 Agent
 
-> 当前状态：阶段 2 已完成，阶段 3 待开始；尚未接入数据分析和模型调用。
+> 当前状态：阶段 3 已完成，阶段 4 待开始；尚未接入数据读取服务和模型调用。
 
 ## 项目定位
 
@@ -49,6 +49,16 @@ DataPilot 是面向中文电商经营数据的本地自然语言分析工作台�
 - 多用户权限、登录、分布式部署和实时数据同步。
 - 尚未实现的能力不会写入完成状态，也不会提前写入简历。
 
+## 当前样例数据
+
+`data/sample_ecommerce.csv` 和 `data/sample_ecommerce.xlsx` 是固定种子生成的合成订单数据，共 243 行、13 个字段。数据说明和质量场景记录在 [`data/README.md`](data/README.md)。
+
+重新生成样例文件：
+
+```powershell
+.\.venv\Scripts\python.exe scripts\generate_sample_data.py
+```
+
 ## 开发计划
 
 完整的阶段目标、文件产物、验收标准和禁止事项记录在：
@@ -79,6 +89,6 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
 
-阶段 2 已验证：依赖可以安装和导入，配置测试 3 项通过，Python 语法检查通过，Streamlit 健康检查返回 `200 ok`。当前页面只验证上传入口，不读取数据，也不调用 Ollama。
+阶段 2 已验证：依赖可以安装和导入，配置测试 3 项通过，Python 语法检查通过，Streamlit 健康检查返回 `200 ok`。阶段 3 已验证：固定种子可复现，CSV/XLSX 内容一致，样例数据测试 3 项通过。当前页面仍只验证上传入口，不读取数据，也不调用 Ollama。
 
 已知待处理问题：当前 Windows 中文路径下，Plotly 5.24.1 调用 Kaleido 0.2.1 生成 PNG 时出现 Kaleido 启动错误；PNG 导出属于阶段 11，后续会单独处理并测试，不提前宣称已支持。
