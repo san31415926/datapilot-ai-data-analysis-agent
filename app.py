@@ -1,8 +1,9 @@
-"""DataPilot 阶段 9 中文数据分析工作台。"""
+"""DataPilot 阶段 11 中文数据分析工作台。"""
 
 from __future__ import annotations
 
 import hashlib
+import json
 
 import pandas as pd
 import streamlit as st
@@ -11,11 +12,13 @@ from config import get_settings
 from src.analysis_runner import PlanExecutionResult, execute_analysis_plan
 from src.data_loader import DataLoadError, load_file
 from src.data_quality import analyze_quality
+from src.exporters import build_markdown_report, rows_to_csv_bytes
 from src.ollama_client import OllamaClient, OllamaClientError
 from src.planner import StructuredPlanner
 from src.query_engine import ReadOnlyQueryEngine
 from src.report_generator import ReportGenerationResult, ReportGenerator
-from src.tools import run_readonly_sql
+from src.tools import build_chart, run_readonly_sql
+from src.visualization import chart_to_csv_bytes, export_chart_png, render_chart
 
 
 settings = get_settings()
@@ -57,6 +60,61 @@ def display_value(value: object) -> str:
         pass
     return str(value)
 
+
+def render_chart_exports(chart_payload: dict[str, object], key_prefix: str) -> None:
+    """渲染结构化图表，并提供 CSV/PNG 下载。"""
+
+    try:
+        rendered = render_chart(chart_payload)
+    except (TypeError, ValueError):
+        st.warning("图表结果结构不完整，当前无法渲染。")
+        return
+
+    st.plotly_chart(rendered.figure, use_container_width=True)
+    if rendered.warning:
+        st.warning(rendered.warning)
+
+    chart_token = hashlib.sha256(
+        json.dumps(chart_payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    ).hexdigest()[:12]
+    png_state_key = f"{key_prefix}_png_result_{chart_token}"
+    if st.button("准备 PNG 下载", key=f"{key_prefix}_prepare_png_{chart_token}"):
+        with st.spinner("正在生成 PNG 文件..."):
+            st.session_state[png_state_key] = export_chart_png(chart_payload)
+    png_result = st.session_state.get(png_state_key)
+    if png_result is None:
+        st.caption("需要图片文件时，点击“准备 PNG 下载”。")
+    elif png_result.warning:
+        st.caption(png_result.warning)
+    download_columns = st.columns(2)
+    with download_columns[0]:
+        st.download_button(
+            "下载图表 CSV",
+            data=chart_to_csv_bytes(chart_payload),
+            file_name="datapilot-chart-data.csv",
+            mime="text/csv",
+            key=f"{key_prefix}_csv",
+        )
+    if png_result is not None:
+        with download_columns[1]:
+            st.download_button(
+                "下载图表 PNG",
+                data=png_result.data,
+                file_name="datapilot-chart.png",
+                mime="image/png",
+                key=f"{key_prefix}_png_{chart_token}",
+            )
+
+
+def numeric_columns(frame: pd.DataFrame) -> list[str]:
+    """返回可以交给图表工具作为纵轴的数值字段。"""
+
+    return [
+        str(column)
+        for column in frame.columns
+        if pd.api.types.is_numeric_dtype(frame[column])
+    ]
+
 st.set_page_config(
     page_title=settings.app_name,
     page_icon="📊",
@@ -64,7 +122,7 @@ st.set_page_config(
 )
 
 st.title("DataPilot")
-st.caption("本地自然语言数据分析 Agent | 阶段 10：计划执行与中文报告")
+st.caption("本地自然语言数据分析 Agent | 阶段 11：图表与结果导出")
 
 with st.sidebar:
     st.subheader("运行配置")
@@ -415,15 +473,26 @@ else:
                     st.write(f"预期输出：{step.expected_output}")
                     if step.status == "success":
                         if step.result.get("rows"):
+                            rows = step.result["rows"]
                             st.dataframe(
-                                pd.DataFrame(step.result["rows"]),
+                                pd.DataFrame(rows),
                                 use_container_width=True,
                                 hide_index=True,
+                            )
+                            st.download_button(
+                                "下载此步骤 CSV",
+                                data=rows_to_csv_bytes(rows),
+                                file_name=f"datapilot-step-{step.step_index + 1}.csv",
+                                mime="text/csv",
+                                key=f"download_step_csv_{step.step_index}",
                             )
                         elif step.result.get("overview"):
                             st.json(step.result["overview"])
                         elif step.result.get("chart"):
-                            st.json(step.result["chart"])
+                            render_chart_exports(
+                                step.result["chart"],
+                                f"plan_chart_{step.step_index}",
+                            )
                     else:
                         st.error(step.record.error_message or "工具未返回成功结果。")
                     st.write(
@@ -433,6 +502,93 @@ else:
                             "工具记录": step.record.model_dump(),
                         }
                     )
+
+            table_steps = [
+                step
+                for step in execution_result.steps
+                if step.success and isinstance(step.result.get("rows"), list) and step.result["rows"]
+            ]
+            if table_steps:
+                st.subheader("结果可视化")
+                st.caption("图表只使用成功工具返回的结构化结果，不执行模型生成的代码。")
+                step_labels = {
+                    f"步骤 {step.step_index + 1}：{step.tool}": step
+                    for step in table_steps
+                }
+                selected_label = st.selectbox(
+                    "选择结果",
+                    list(step_labels),
+                    key="chart_result_step",
+                )
+                selected_step = step_labels[selected_label]
+                selected_frame = pd.DataFrame(selected_step.result["rows"])
+                available_numeric = numeric_columns(selected_frame)
+                available_x = [
+                    str(column)
+                    for column in selected_frame.columns
+                    if str(column) not in available_numeric
+                ] or [str(column) for column in selected_frame.columns]
+                if not available_numeric:
+                    st.info("当前结果没有可用的数值字段，暂时无法绘制图表。")
+                else:
+                    chart_columns = st.columns(3)
+                    with chart_columns[0]:
+                        selected_chart_type = st.selectbox(
+                            "图表类型",
+                            ["bar", "line", "pie"],
+                            format_func={
+                                "bar": "柱状图",
+                                "line": "折线图",
+                                "pie": "饼图",
+                            }.get,
+                            key="manual_chart_type",
+                        )
+                    with chart_columns[1]:
+                        selected_x_field = st.selectbox(
+                            "横轴字段",
+                            available_x,
+                            key="manual_chart_x_field",
+                        )
+                    with chart_columns[2]:
+                        selected_y_field = st.selectbox(
+                            "纵轴字段",
+                            available_numeric,
+                            key="manual_chart_y_field",
+                        )
+                    selected_title = st.text_input(
+                        "图表标题",
+                        value=f"{selected_x_field}与{selected_y_field}分析",
+                        key="manual_chart_title",
+                    )
+                    manual_chart = build_chart(
+                        selected_frame,
+                        {
+                            "chart_type": selected_chart_type,
+                            "x_field": selected_x_field,
+                            "y_field": selected_y_field,
+                            "title": selected_title,
+                            "limit": 100,
+                        },
+                    )
+                    if manual_chart.success and manual_chart.chart is not None:
+                        render_chart_exports(
+                            manual_chart.chart.model_dump(),
+                            "manual_chart",
+                        )
+                    else:
+                        st.warning(manual_chart.record.error_message or "当前字段无法生成图表。")
+
+            st.download_button(
+                "下载 Markdown 分析报告",
+                data=build_markdown_report(
+                    st.session_state.get("planning_question", planning_question),
+                    execution_result,
+                    st.session_state.get("report_result"),
+                ).encode("utf-8"),
+                file_name="datapilot-analysis-report.md",
+                mime="text/markdown",
+                key="download_markdown_report",
+            )
 
         report_result = st.session_state.get("report_result")
         if isinstance(report_result, ReportGenerationResult):
@@ -462,5 +618,5 @@ else:
 
 st.divider()
 st.subheader("当前阶段验收")
-st.write("数据概览、质量检查、受控工具、Ollama 模型、计划执行和中文报告已经接入工作台。")
-st.write("下一阶段将补充图表展示、导出和固定评估问题。")
+st.write("数据概览、质量检查、受控工具、Ollama 模型、计划执行、中文报告、图表和结果导出已经接入工作台。")
+st.write("下一阶段将补充固定评估问题、失败案例记录和演示截图。")
