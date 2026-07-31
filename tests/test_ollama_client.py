@@ -47,13 +47,20 @@ class OllamaClientTestCase(unittest.TestCase):
             max_output_tokens=500,
             transport=httpx.MockTransport(handler),
         ) as client:
-            result = client.chat("qwen2.5:3b", [{"role": "user", "content": "哪个地区销售额最高？"}])
+            result = client.chat(
+                "qwen2.5:3b",
+                [{"role": "user", "content": "哪个地区销售额最高？"}],
+                response_format={"type": "object"},
+                think=False,
+            )
 
         payload = json.loads(requests[0].content)
         self.assertEqual(requests[0].url.path, "/api/chat")
         self.assertEqual(payload["model"], "qwen2.5:3b")
         self.assertFalse(payload["stream"])
         self.assertEqual(payload["options"]["num_predict"], 500)
+        self.assertEqual(payload["format"], {"type": "object"})
+        self.assertFalse(payload["think"])
         self.assertEqual(result.content, "华东销售额最高。")
 
     def test_reports_service_unavailable_without_exposing_transport_error(self) -> None:

@@ -1,4 +1,4 @@
-"""DataPilot 阶段 6 中文数据分析工作台。"""
+"""DataPilot 阶段 9 中文数据分析工作台。"""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ from config import get_settings
 from src.data_loader import DataLoadError, load_file
 from src.data_quality import analyze_quality
 from src.ollama_client import OllamaClient, OllamaClientError
+from src.planner import StructuredPlanner
 from src.query_engine import ReadOnlyQueryEngine
 from src.tools import run_readonly_sql
 
@@ -57,7 +58,7 @@ st.set_page_config(
 )
 
 st.title("DataPilot")
-st.caption("本地自然语言数据分析 Agent | 阶段 7：受控工具工作台")
+st.caption("本地自然语言数据分析 Agent | 阶段 9：结构化分析计划")
 
 with st.sidebar:
     st.subheader("运行配置")
@@ -251,7 +252,71 @@ else:
                     }
                 )
 
+        st.subheader("结构化分析计划")
+        st.caption("模型只负责提出计划；计划会先经过 Pydantic、字段白名单和 SQL 只读校验，当前不会自动执行。")
+        planning_question = st.text_area(
+            "分析问题",
+            value="哪个地区的销售额最高？请给出分组统计计划。",
+            height=90,
+        )
+        generate_plan = st.button("生成分析计划", key="generate_analysis_plan")
+        if generate_plan:
+            selected_model = st.session_state.get("selected_ollama_model")
+            if not selected_model:
+                st.warning("请先在侧边栏检测模型，并选择一个本地生成模型。")
+            elif not planning_question.strip():
+                st.warning("分析问题不能为空。")
+            else:
+                schema_context = [
+                    {
+                        "name": column.name,
+                        "logical_type": column.logical_type,
+                        "role": quality_by_name[column.name].role,
+                    }
+                    for column in loaded.columns
+                ]
+                planning_engine = ReadOnlyQueryEngine(
+                    loaded.dataframe,
+                    max_rows=settings.max_query_rows,
+                    max_result_bytes=settings.max_query_result_mb * 1024 * 1024,
+                    timeout_seconds=settings.query_timeout_seconds,
+                )
+                try:
+                    with st.spinner(f"{selected_model} 正在生成并校验分析计划..."):
+                        with OllamaClient(
+                            settings.ollama_base_url,
+                            timeout_seconds=settings.ollama_timeout_seconds,
+                            temperature=settings.ollama_temperature,
+                            max_output_tokens=settings.ollama_max_output_tokens,
+                        ) as ollama:
+                            planning_result = StructuredPlanner(
+                                ollama,
+                                selected_model,
+                                max_repairs=1,
+                            ).create_plan(
+                                planning_question,
+                                planning_engine,
+                                schema_context,
+                            )
+                finally:
+                    planning_engine.close()
+
+                if planning_result.success:
+                    st.success(
+                        f"计划通过校验：使用 {planning_result.model}，共 {planning_result.attempts} 次模型请求。"
+                    )
+                    st.json(planning_result.plan.model_dump())
+                else:
+                    st.error(
+                        f"计划未通过校验：共尝试 {planning_result.attempts} 次，当前不会执行工具。"
+                    )
+                    st.dataframe(
+                        pd.DataFrame([problem.model_dump() for problem in planning_result.problems]),
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+
 st.divider()
 st.subheader("当前阶段验收")
-st.write("数据概览、质量检查、DuckDB 只读查询和受控工具已经接入工作台。")
-st.write("下一阶段将接入 Ollama，并让模型先生成结构化分析计划。")
+st.write("数据概览、质量检查、受控工具、Ollama 模型和结构化分析计划已经接入工作台。")
+st.write("下一阶段将按通过校验的计划执行工具，并生成基于真实结果的中文报告。")

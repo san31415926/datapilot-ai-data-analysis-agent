@@ -119,7 +119,14 @@ class OllamaClient:
             error_message=message,
         )
 
-    def chat(self, model: str, messages: Iterable[dict[str, str]]) -> ChatResult:
+    def chat(
+        self,
+        model: str,
+        messages: Iterable[dict[str, str]],
+        *,
+        response_format: str | dict[str, Any] | None = None,
+        think: bool | None = None,
+    ) -> ChatResult:
         """调用本地聊天模型，返回最终内容和可选思考字段。"""
 
         model_name = model.strip() if isinstance(model, str) else ""
@@ -127,18 +134,23 @@ class OllamaClient:
             raise OllamaClientError("INVALID_MODEL", "模型名称不能为空且不能超过 200 个字符。")
         normalized_messages = _normalize_messages(messages)
         started_at = time.perf_counter()
+        payload = {
+            "model": model_name,
+            "messages": normalized_messages,
+            "stream": False,
+            "options": {
+                "temperature": self.temperature,
+                "num_predict": self.max_output_tokens,
+            },
+        }
+        if response_format is not None:
+            payload["format"] = response_format
+        if think is not None:
+            payload["think"] = think
         try:
             response = self._client.post(
                 "/api/chat",
-                json={
-                    "model": model_name,
-                    "messages": normalized_messages,
-                    "stream": False,
-                    "options": {
-                        "temperature": self.temperature,
-                        "num_predict": self.max_output_tokens,
-                    },
-                },
+                json=payload,
             )
         except httpx.TimeoutException as exc:
             raise OllamaClientError("OLLAMA_TIMEOUT", "模型生成超时，请缩短问题或提高超时时间。") from exc

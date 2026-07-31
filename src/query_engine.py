@@ -10,7 +10,7 @@ from typing import Any
 import duckdb
 import pandas as pd
 
-from src.sql_guard import SQLGuard
+from src.sql_guard import SQLGuard, SQLValidation
 
 
 @dataclass(frozen=True)
@@ -78,6 +78,12 @@ class ReadOnlyQueryEngine:
         """判断字段是否为可聚合的数值字段。"""
 
         return column in self._numeric_columns
+
+    def validate_sql(self, sql: str) -> SQLValidation:
+        """只做 SQL 安全校验，不执行查询。"""
+
+        with self._lock:
+            return self._guard.validate(sql, self._connection)
 
     def execute(self, sql: str) -> QueryResponse:
         """校验并执行查询，失败时只返回安全的中文错误。"""
