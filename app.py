@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+import hashlib
+
 import pandas as pd
 import streamlit as st
 
 from config import get_settings
+from src.analysis_runner import PlanExecutionResult, execute_analysis_plan
 from src.data_loader import DataLoadError, load_file
 from src.data_quality import analyze_quality
 from src.ollama_client import OllamaClient, OllamaClientError
 from src.planner import StructuredPlanner
 from src.query_engine import ReadOnlyQueryEngine
+from src.report_generator import ReportGenerationResult, ReportGenerator
 from src.tools import run_readonly_sql
 
 
@@ -23,6 +27,8 @@ ROLE_LABELS = {
     "text": "文本",
 }
 SEVERITY_LABELS = {"warning": "警告", "error": "错误"}
+# 结构化 JSON 对步骤一致性更敏感，规划和报告使用低温度。
+STRUCTURED_TEMPERATURE = 0.0
 SQL_EXAMPLES = {
     "按地区汇总销售额": (
         "SELECT 地区, SUM(销售额) AS 总销售额 "
@@ -58,7 +64,7 @@ st.set_page_config(
 )
 
 st.title("DataPilot")
-st.caption("本地自然语言数据分析 Agent | 阶段 9：结构化分析计划")
+st.caption("本地自然语言数据分析 Agent | 阶段 10：计划执行与中文报告")
 
 with st.sidebar:
     st.subheader("运行配置")
@@ -123,10 +129,18 @@ uploaded_file = st.file_uploader(
 if uploaded_file is None:
     st.info("请先选择 CSV 或 XLSX 文件。")
 else:
+    uploaded_content = uploaded_file.getvalue()
+    dataset_key = hashlib.sha256(uploaded_content).hexdigest()
+    if st.session_state.get("analysis_dataset_key") != dataset_key:
+        st.session_state["analysis_dataset_key"] = dataset_key
+        st.session_state.pop("planning_result", None)
+        st.session_state.pop("planning_question", None)
+        st.session_state.pop("execution_result", None)
+        st.session_state.pop("report_result", None)
     try:
         loaded = load_file(
             uploaded_file.name,
-            uploaded_file.getvalue(),
+            uploaded_content,
             max_upload_mb=settings.max_upload_mb,
             max_rows=settings.max_rows,
         )
@@ -253,7 +267,7 @@ else:
                 )
 
         st.subheader("结构化分析计划")
-        st.caption("模型只负责提出计划；计划会先经过 Pydantic、字段白名单和 SQL 只读校验，当前不会自动执行。")
+        st.caption("模型只负责提出计划；计划会先经过 Pydantic、字段白名单和 SQL 只读校验，确认后才执行受控工具。")
         planning_question = st.text_area(
             "分析问题",
             value="哪个地区的销售额最高？请给出分组统计计划。",
@@ -286,7 +300,7 @@ else:
                         with OllamaClient(
                             settings.ollama_base_url,
                             timeout_seconds=settings.ollama_timeout_seconds,
-                            temperature=settings.ollama_temperature,
+                            temperature=STRUCTURED_TEMPERATURE,
                             max_output_tokens=settings.ollama_max_output_tokens,
                         ) as ollama:
                             planning_result = StructuredPlanner(
@@ -301,22 +315,152 @@ else:
                 finally:
                     planning_engine.close()
 
-                if planning_result.success:
+                st.session_state["planning_result"] = planning_result
+                st.session_state["planning_question"] = planning_question
+                st.session_state.pop("execution_result", None)
+                st.session_state.pop("report_result", None)
+
+        planning_result = st.session_state.get("planning_result")
+        if planning_result is not None:
+            if planning_result.success and planning_result.plan is not None:
+                st.success(
+                    f"计划通过校验：使用 {planning_result.model}，共 {planning_result.attempts} 次模型请求。"
+                )
+                st.json(planning_result.plan.model_dump())
+
+                execute_plan = st.button(
+                    "执行计划并生成报告",
+                    key="execute_analysis_plan",
+                    type="primary",
+                )
+                if execute_plan:
+                    execution_engine = ReadOnlyQueryEngine(
+                        loaded.dataframe,
+                        max_rows=settings.max_query_rows,
+                        max_result_bytes=settings.max_query_result_mb * 1024 * 1024,
+                        timeout_seconds=settings.query_timeout_seconds,
+                    )
+                    try:
+                        with st.spinner("正在执行已校验工具计划..."):
+                            execution_result = execute_analysis_plan(
+                                planning_result.plan,
+                                loaded,
+                                execution_engine,
+                            )
+                    finally:
+                        execution_engine.close()
+                    st.session_state["execution_result"] = execution_result
+                    st.session_state.pop("report_result", None)
+
+                    if execution_result.success:
+                        selected_model = st.session_state.get("selected_ollama_model")
+                        if selected_model:
+                            with st.spinner(f"{selected_model} 正在根据真实结果生成报告..."):
+                                try:
+                                    with OllamaClient(
+                                        settings.ollama_base_url,
+                                        timeout_seconds=settings.ollama_timeout_seconds,
+                                        temperature=STRUCTURED_TEMPERATURE,
+                                        max_output_tokens=settings.ollama_max_output_tokens,
+                                    ) as ollama:
+                                        report_result = ReportGenerator(
+                                            ollama,
+                                            selected_model,
+                                            max_repairs=1,
+                                        ).generate(
+                                            st.session_state.get("planning_question", planning_question),
+                                            execution_result,
+                                        )
+                                except OllamaClientError as exc:
+                                    report_result = ReportGenerationResult(
+                                        status="fallback",
+                                        backend="fallback",
+                                        model=selected_model,
+                                        attempts=1,
+                                        report=None,
+                                        error_message=exc.message,
+                                    )
+                            st.session_state["report_result"] = report_result
+                        else:
+                            st.session_state["report_result"] = ReportGenerationResult(
+                                status="error",
+                                backend="none",
+                                attempts=0,
+                                error_message="没有选择本地模型，无法生成报告。",
+                            )
+
+            else:
+                st.error(
+                    f"计划未通过校验：共尝试 {planning_result.attempts} 次，当前不会执行工具。"
+                )
+                st.dataframe(
+                    pd.DataFrame([problem.model_dump() for problem in planning_result.problems]),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+
+        execution_result = st.session_state.get("execution_result")
+        if isinstance(execution_result, PlanExecutionResult):
+            st.subheader("工具执行结果")
+            if execution_result.success:
+                st.success(f"计划执行完成，共执行 {len(execution_result.steps)} 个工具步骤。")
+            else:
+                st.error(execution_result.error_message or "计划执行失败，未生成可信报告。")
+            for step in execution_result.steps:
+                status_label = {"success": "成功", "rejected": "拒绝", "error": "失败"}.get(
+                    step.status,
+                    step.status,
+                )
+                with st.expander(f"步骤 {step.step_index + 1}：{step.tool}（{status_label}）"):
+                    st.write(f"预期输出：{step.expected_output}")
+                    if step.status == "success":
+                        if step.result.get("rows"):
+                            st.dataframe(
+                                pd.DataFrame(step.result["rows"]),
+                                use_container_width=True,
+                                hide_index=True,
+                            )
+                        elif step.result.get("overview"):
+                            st.json(step.result["overview"])
+                        elif step.result.get("chart"):
+                            st.json(step.result["chart"])
+                    else:
+                        st.error(step.record.error_message or "工具未返回成功结果。")
+                    st.write(
+                        {
+                            "状态": step.record.status,
+                            "耗时（毫秒）": step.record.elapsed_ms,
+                            "工具记录": step.record.model_dump(),
+                        }
+                    )
+
+        report_result = st.session_state.get("report_result")
+        if isinstance(report_result, ReportGenerationResult):
+            st.subheader("中文分析报告")
+            if report_result.report is None:
+                st.error(report_result.error_message or "报告生成失败。")
+            else:
+                if report_result.success:
                     st.success(
-                        f"计划通过校验：使用 {planning_result.model}，共 {planning_result.attempts} 次模型请求。"
+                        f"报告由 {report_result.model} 生成，共尝试 {report_result.attempts} 次。"
                     )
-                    st.json(planning_result.plan.model_dump())
-                else:
-                    st.error(
-                        f"计划未通过校验：共尝试 {planning_result.attempts} 次，当前不会执行工具。"
+                elif report_result.status == "fallback":
+                    st.warning(
+                        "本地模型报告未生成，下面只展示安全降级说明和真实工具证据。"
                     )
-                    st.dataframe(
-                        pd.DataFrame([problem.model_dump() for problem in planning_result.problems]),
-                        use_container_width=True,
-                        hide_index=True,
-                    )
+                st.markdown(f"### {report_result.report.title}")
+                st.write(report_result.report.summary)
+                if report_result.report.findings:
+                    st.markdown("**关键事实**")
+                    for finding in report_result.report.findings:
+                        st.write(f"- {finding}")
+                if report_result.report.limitations:
+                    st.markdown("**数据限制**")
+                    for limitation in report_result.report.limitations:
+                        st.write(f"- {limitation}")
+                st.caption(f"引用工具步骤：{report_result.report.evidence_steps or '无'}")
 
 st.divider()
 st.subheader("当前阶段验收")
-st.write("数据概览、质量检查、受控工具、Ollama 模型和结构化分析计划已经接入工作台。")
-st.write("下一阶段将按通过校验的计划执行工具，并生成基于真实结果的中文报告。")
+st.write("数据概览、质量检查、受控工具、Ollama 模型、计划执行和中文报告已经接入工作台。")
+st.write("下一阶段将补充图表展示、导出和固定评估问题。")
