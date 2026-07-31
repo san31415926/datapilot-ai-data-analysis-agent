@@ -1,7 +1,4 @@
-"""DataPilot 阶段 5 数据概览页。
-
-此页面展示数据概览和质量问题，不执行 SQL 或模型调用。
-"""
+"""DataPilot 阶段 6 中文数据分析工作台。"""
 
 from __future__ import annotations
 
@@ -11,6 +8,7 @@ import streamlit as st
 from config import get_settings
 from src.data_loader import DataLoadError, load_file
 from src.data_quality import analyze_quality
+from src.query_engine import ReadOnlyQueryEngine
 
 
 settings = get_settings()
@@ -22,6 +20,33 @@ ROLE_LABELS = {
     "text": "文本",
 }
 SEVERITY_LABELS = {"warning": "警告", "error": "错误"}
+SQL_EXAMPLES = {
+    "按地区汇总销售额": (
+        "SELECT 地区, SUM(销售额) AS 总销售额 "
+        "FROM uploaded_data GROUP BY 地区 ORDER BY 总销售额 DESC"
+    ),
+    "查看高额订单": (
+        "SELECT 订单编号, 商品名称, 销售额 FROM uploaded_data "
+        "WHERE 销售额 >= 1000 ORDER BY 销售额 DESC LIMIT 20"
+    ),
+    "统计各渠道订单数": (
+        "SELECT 渠道, COUNT(*) AS 订单数, SUM(销售额) AS 总销售额 "
+        "FROM uploaded_data GROUP BY 渠道 ORDER BY 总销售额 DESC"
+    ),
+}
+
+
+def display_value(value: object) -> str:
+    """将质量报告中的混合类型值转换为稳定的表格文本。"""
+
+    if value is None:
+        return "无"
+    try:
+        if bool(pd.isna(value)):
+            return "无"
+    except (TypeError, ValueError):
+        pass
+    return str(value)
 
 st.set_page_config(
     page_title=settings.app_name,
@@ -30,13 +55,16 @@ st.set_page_config(
 )
 
 st.title("DataPilot")
-st.caption("本地自然语言数据分析 Agent | 阶段 5：数据概览与质量检查")
+st.caption("本地自然语言数据分析 Agent | 阶段 6：数据概览与安全查询")
 
 with st.sidebar:
     st.subheader("运行配置")
     st.text_input("Ollama 地址", value=settings.ollama_base_url, disabled=True)
     st.text_input("默认模型", value=settings.default_model, disabled=True)
-    st.caption("模型调用将在后续阶段接入。")
+    st.subheader("查询限制")
+    st.caption(f"最多返回 {settings.max_query_rows:,} 行")
+    st.caption(f"结果不超过 {settings.max_query_result_mb} MB")
+    st.caption(f"单次查询最多运行 {settings.query_timeout_seconds:g} 秒")
 
 st.subheader("上传数据")
 uploaded_file = st.file_uploader(
@@ -110,8 +138,8 @@ else:
                     "非空数量": profile.non_empty_count,
                     "缺失数量": quality_by_name[profile.name].missing_count,
                     "唯一值数量": quality_by_name[profile.name].unique_count,
-                    "最小值": quality_by_name[profile.name].min_value,
-                    "最大值": quality_by_name[profile.name].max_value,
+                    "最小值": display_value(quality_by_name[profile.name].min_value),
+                    "最大值": display_value(quality_by_name[profile.name].max_value),
                     "转换失败行": ", ".join(map(str, profile.conversion_failure_rows)) or "无",
                 }
                 for profile in loaded.columns
@@ -122,7 +150,61 @@ else:
         st.subheader("数据预览")
         st.dataframe(loaded.dataframe.head(10), use_container_width=True, hide_index=True)
 
+        st.subheader("只读 SQL 查询")
+        st.caption(
+            "查询只允许访问当前上传数据表 uploaded_data，系统会拦截写入语句、多语句、注释、"
+            "外部数据源和超限结果。"
+        )
+        example_name = st.selectbox(
+            "查询示例",
+            ["自定义 SQL", *SQL_EXAMPLES.keys()],
+            index=1,
+            help="示例会填入查询框，你也可以直接修改后执行。",
+        )
+        sql_default = SQL_EXAMPLES.get(example_name, "")
+        sql_text = st.text_area(
+            "SQL 查询语句",
+            value=sql_default,
+            height=130,
+            placeholder="例如：SELECT 地区, SUM(销售额) AS 总销售额 FROM uploaded_data GROUP BY 地区",
+        )
+        run_query = st.button("执行只读查询", type="primary")
+
+        if run_query:
+            engine = ReadOnlyQueryEngine(
+                loaded.dataframe,
+                max_rows=settings.max_query_rows,
+                max_result_bytes=settings.max_query_result_mb * 1024 * 1024,
+                timeout_seconds=settings.query_timeout_seconds,
+            )
+            try:
+                response = engine.execute(sql_text)
+            finally:
+                engine.close()
+
+            execution = response.execution
+            if response.success:
+                st.success(
+                    f"查询成功：返回 {execution.row_count:,} 行，耗时 {execution.elapsed_ms} 毫秒。"
+                )
+                st.dataframe(response.dataframe, use_container_width=True, hide_index=True)
+            else:
+                st.error(
+                    f"查询未执行或执行失败：{execution.error_message} "
+                    f"（错误码：{execution.error_code}）"
+                )
+            with st.expander("查看本次执行记录"):
+                st.write(
+                    {
+                        "状态": execution.status,
+                        "耗时（毫秒）": execution.elapsed_ms,
+                        "返回行数": execution.row_count,
+                        "结果大小（字节）": execution.result_bytes,
+                        "执行 SQL": execution.sql,
+                    }
+                )
+
 st.divider()
 st.subheader("当前阶段验收")
-st.write("数据概览、缺失值、重复记录、数值范围和字段角色已经接入工作台。")
-st.write("下一阶段将进入 DuckDB 只读查询和 SQL 安全边界。")
+st.write("数据概览、质量检查、DuckDB 只读查询和 SQL 安全边界已经接入工作台。")
+st.write("下一阶段将把查询能力拆成受控工具，并接入结构化分析计划。")

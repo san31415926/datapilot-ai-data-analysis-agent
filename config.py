@@ -1,7 +1,4 @@
-"""DataPilot 的阶段性运行配置。
-
-当前阶段只提供配置读取和启动页需要的默认值，模型调用会在后续阶段接入。
-"""
+"""DataPilot 的运行配置。"""
 
 from __future__ import annotations
 
@@ -20,6 +17,9 @@ class Settings:
     default_model: str = "qwen2.5:3b"
     max_upload_mb: int = 20
     max_rows: int = 100_000
+    max_query_rows: int = 1_000
+    max_query_result_mb: int = 1
+    query_timeout_seconds: float = 5.0
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -30,6 +30,15 @@ class Settings:
             default_model=os.getenv("DATAPILOT_DEFAULT_MODEL", cls.default_model),
             max_upload_mb=_read_positive_int("DATAPILOT_MAX_UPLOAD_MB", cls.max_upload_mb),
             max_rows=_read_positive_int("DATAPILOT_MAX_ROWS", cls.max_rows),
+            max_query_rows=_read_positive_int(
+                "DATAPILOT_MAX_QUERY_ROWS", cls.max_query_rows
+            ),
+            max_query_result_mb=_read_positive_int(
+                "DATAPILOT_MAX_QUERY_RESULT_MB", cls.max_query_result_mb
+            ),
+            query_timeout_seconds=_read_positive_float(
+                "DATAPILOT_QUERY_TIMEOUT_SECONDS", cls.query_timeout_seconds
+            ),
         )
 
 
@@ -39,6 +48,17 @@ def _read_positive_int(name: str, fallback: int) -> int:
         return fallback
     try:
         parsed = int(value)
+    except ValueError:
+        return fallback
+    return parsed if parsed > 0 else fallback
+
+
+def _read_positive_float(name: str, fallback: float) -> float:
+    value = os.getenv(name)
+    if value is None:
+        return fallback
+    try:
+        parsed = float(value)
     except ValueError:
         return fallback
     return parsed if parsed > 0 else fallback
