@@ -1,4 +1,4 @@
-"""DataPilot 阶段 11 中文数据分析工作台。"""
+"""DataPilot 中文数据分析工作台。"""
 
 from __future__ import annotations
 
@@ -15,6 +15,12 @@ from src.data_quality import analyze_quality
 from src.exporters import build_markdown_report, rows_to_csv_bytes
 from src.ollama_client import OllamaClient, OllamaClientError
 from src.planner import StructuredPlanner
+from src.practice_data import (
+    PRACTICE_DATASETS,
+    PRACTICE_DATASET_BY_SLUG,
+    practice_catalog_frame,
+    practice_file_path,
+)
 from src.query_engine import ReadOnlyQueryEngine
 from src.report_generator import ReportGenerationResult, ReportGenerator
 from src.tools import build_chart, run_readonly_sql
@@ -122,7 +128,7 @@ st.set_page_config(
 )
 
 st.title("DataPilot")
-st.caption("本地自然语言数据分析 Agent | 阶段 11：图表与结果导出")
+st.caption("中文数据分析工作台")
 
 with st.sidebar:
     st.subheader("运行配置")
@@ -177,18 +183,70 @@ with st.sidebar:
     st.caption(f"结果不超过 {settings.max_query_result_mb} MB")
     st.caption(f"单次查询最多运行 {settings.query_timeout_seconds:g} 秒")
 
-st.subheader("上传数据")
-uploaded_file = st.file_uploader(
-    "选择一份 CSV 或 XLSX 文件",
-    type=["csv", "xlsx"],
-    help=f"单文件不超过 {settings.max_upload_mb} MB，最多读取 {settings.max_rows:,} 行。",
+st.subheader("选择数据")
+st.caption("选择练习数据直接开始，或上传自己的 CSV / XLSX 文件。")
+source_mode = st.radio(
+    "数据来源",
+    ["上传文件", "练习数据"],
+    horizontal=True,
+    key="data_source_mode",
 )
+source_name: str | None = None
+source_content: bytes | None = None
 
-if uploaded_file is None:
-    st.info("请先选择 CSV 或 XLSX 文件。")
+with st.expander("练习数据中心", expanded=True):
+    st.dataframe(practice_catalog_frame(), use_container_width=True, hide_index=True)
+    if source_mode == "练习数据":
+        practice_options = [item.slug for item in PRACTICE_DATASETS]
+        selected_slug = st.selectbox(
+            "选择练习主题",
+            practice_options,
+            format_func=lambda slug: PRACTICE_DATASET_BY_SLUG[slug].name,
+            key="practice_dataset_slug",
+        )
+        selected_dataset = PRACTICE_DATASET_BY_SLUG[selected_slug]
+        selected_path = practice_file_path(selected_slug, "csv")
+        selected_xlsx_path = practice_file_path(selected_slug, "xlsx")
+        if selected_path.exists() and selected_xlsx_path.exists():
+            preview_frame = pd.read_csv(selected_path)
+            st.write(selected_dataset.description)
+            st.caption("建议练习：" + "；".join(selected_dataset.suggested_questions))
+            st.dataframe(preview_frame.head(10), use_container_width=True, hide_index=True)
+            download_columns = st.columns(2)
+            with download_columns[0]:
+                st.download_button(
+                    "下载 CSV",
+                    data=selected_path.read_bytes(),
+                    file_name=selected_path.name,
+                    mime="text/csv",
+                    key="download_practice_csv",
+                )
+            with download_columns[1]:
+                st.download_button(
+                    "下载 XLSX",
+                    data=selected_xlsx_path.read_bytes(),
+                    file_name=selected_xlsx_path.name,
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key="download_practice_xlsx",
+                )
+            source_name = selected_path.name
+            source_content = selected_path.read_bytes()
+        else:
+            st.error("练习数据文件尚未生成，请重新启动项目或运行生成命令。")
+    else:
+        uploaded_file = st.file_uploader(
+            "选择一份 CSV 或 XLSX 文件",
+            type=["csv", "xlsx"],
+            help=f"单文件不超过 {settings.max_upload_mb} MB，最多读取 {settings.max_rows:,} 行。",
+        )
+        if uploaded_file is not None:
+            source_name = uploaded_file.name
+            source_content = uploaded_file.getvalue()
+
+if source_content is None or source_name is None:
+    st.info("请选择数据来源后开始分析。")
 else:
-    uploaded_content = uploaded_file.getvalue()
-    dataset_key = hashlib.sha256(uploaded_content).hexdigest()
+    dataset_key = hashlib.sha256(source_content).hexdigest()
     if st.session_state.get("analysis_dataset_key") != dataset_key:
         st.session_state["analysis_dataset_key"] = dataset_key
         st.session_state.pop("planning_result", None)
@@ -197,8 +255,8 @@ else:
         st.session_state.pop("report_result", None)
     try:
         loaded = load_file(
-            uploaded_file.name,
-            uploaded_content,
+            source_name,
+            source_content,
             max_upload_mb=settings.max_upload_mb,
             max_rows=settings.max_rows,
         )
@@ -615,8 +673,3 @@ else:
                     for limitation in report_result.report.limitations:
                         st.write(f"- {limitation}")
                 st.caption(f"引用工具步骤：{report_result.report.evidence_steps or '无'}")
-
-st.divider()
-st.subheader("当前阶段验收")
-st.write("数据概览、质量检查、受控工具、Ollama 模型、计划执行、中文报告、图表和结果导出已经接入工作台。")
-st.write("下一阶段将补充失败案例记录和演示截图。")
