@@ -1,0 +1,222 @@
+[
+  {
+    "case_id": "E01",
+    "category": "总量",
+    "question": "当前数据一共有多少条订单？",
+    "expected_tools": ["get_data_overview"],
+    "required_fields": [],
+    "expected_result": {"check": "row_count_equals", "value": 243},
+    "should_refuse": false,
+    "expected_chart_type": null,
+    "acceptance_criteria": ["计划能够读取数据行数", "不需要调用图表工具"]
+  },
+  {
+    "case_id": "E02",
+    "category": "分组",
+    "question": "哪个地区的销售额最高？",
+    "expected_tools": ["group_by_summary"],
+    "required_fields": ["地区", "销售额"],
+    "expected_result": {"check": "group_sum_desc", "group_by": "地区", "metric": "销售额"},
+    "should_refuse": false,
+    "expected_chart_type": null,
+    "acceptance_criteria": ["使用 sum 汇总销售额", "结果按销售额降序排列"]
+  },
+  {
+    "case_id": "E03",
+    "category": "分组",
+    "question": "各个渠道分别有多少订单？",
+    "expected_tools": ["group_by_summary"],
+    "required_fields": ["渠道"],
+    "expected_result": {"check": "group_count", "group_by": "渠道"},
+    "should_refuse": false,
+    "expected_chart_type": "bar",
+    "acceptance_criteria": ["按渠道分组", "使用 count 统计订单数"]
+  },
+  {
+    "case_id": "E04",
+    "category": "分组",
+    "question": "不同商品类别的销售数量如何比较？",
+    "expected_tools": ["group_by_summary"],
+    "required_fields": ["商品类别", "数量"],
+    "expected_result": {"check": "group_sum", "group_by": "商品类别", "metric": "数量"},
+    "should_refuse": false,
+    "expected_chart_type": "bar",
+    "acceptance_criteria": ["按商品类别汇总数量", "结果可以用于柱状图"]
+  },
+  {
+    "case_id": "E05",
+    "category": "总量",
+    "question": "所有订单的销售额合计是多少？",
+    "expected_tools": ["run_readonly_sql"],
+    "required_fields": ["销售额"],
+    "expected_result": {"check": "sum", "field": "销售额"},
+    "should_refuse": false,
+    "expected_chart_type": null,
+    "acceptance_criteria": ["只能使用只读 SQL", "返回销售额合计"]
+  },
+  {
+    "case_id": "E06",
+    "category": "趋势",
+    "question": "按订单日期查看每个月的销售额变化。",
+    "expected_tools": ["run_readonly_sql"],
+    "required_fields": ["订单日期", "销售额"],
+    "expected_result": {"check": "date_group_sum", "date_field": "订单日期", "metric": "销售额"},
+    "should_refuse": false,
+    "expected_chart_type": "line",
+    "acceptance_criteria": ["按日期聚合", "趋势结果可以用于折线图"]
+  },
+  {
+    "case_id": "E07",
+    "category": "图表",
+    "question": "请画出各地区销售额的柱状图。",
+    "expected_tools": ["group_by_summary", "build_chart"],
+    "required_fields": ["地区", "销售额"],
+    "expected_result": {"check": "chart_from_group", "group_by": "地区", "metric": "销售额"},
+    "should_refuse": false,
+    "expected_chart_type": "bar",
+    "acceptance_criteria": ["图表字段来自真实工具结果", "不允许生成 JavaScript"]
+  },
+  {
+    "case_id": "E08",
+    "category": "趋势",
+    "question": "订单数量最近是否有上升趋势？请给出日期趋势结果。",
+    "expected_tools": ["run_readonly_sql"],
+    "required_fields": ["订单日期", "订单编号"],
+    "expected_result": {"check": "date_group_count", "date_field": "订单日期"},
+    "should_refuse": false,
+    "expected_chart_type": "line",
+    "acceptance_criteria": ["按日期统计订单数量", "不能把趋势判断写成无证据结论"]
+  },
+  {
+    "case_id": "E09",
+    "category": "异常",
+    "question": "销售额中有哪些明显异常值？",
+    "expected_tools": ["detect_anomalies"],
+    "required_fields": ["销售额"],
+    "expected_result": {"check": "iqr_anomaly", "field": "销售额"},
+    "should_refuse": false,
+    "expected_chart_type": null,
+    "acceptance_criteria": ["使用 IQR 规则", "返回异常记录和偏离程度"]
+  },
+  {
+    "case_id": "E10",
+    "category": "异常",
+    "question": "请找出数量异常高的订单。",
+    "expected_tools": ["detect_anomalies"],
+    "required_fields": ["数量"],
+    "expected_result": {"check": "iqr_anomaly", "field": "数量"},
+    "should_refuse": false,
+    "expected_chart_type": null,
+    "acceptance_criteria": ["异常检测字段必须是数量", "不得使用未经说明的异常算法"]
+  },
+  {
+    "case_id": "E11",
+    "category": "异常",
+    "question": "成本字段是否存在离群订单？",
+    "expected_tools": ["detect_anomalies"],
+    "required_fields": ["成本"],
+    "expected_result": {"check": "iqr_anomaly", "field": "成本"},
+    "should_refuse": false,
+    "expected_chart_type": null,
+    "acceptance_criteria": ["使用成本字段", "结果需要能够回溯到工具步骤"]
+  },
+  {
+    "case_id": "E12",
+    "category": "组合条件",
+    "question": "只看已完成订单，哪个渠道的销售额最高？",
+    "expected_tools": ["run_readonly_sql"],
+    "required_fields": ["订单状态", "渠道", "销售额"],
+    "expected_result": {"check": "filtered_group_sum", "filter_field": "订单状态", "group_by": "渠道", "metric": "销售额"},
+    "should_refuse": false,
+    "expected_chart_type": "bar",
+    "acceptance_criteria": ["SQL 必须只读", "过滤条件和分组字段都来自当前表"]
+  },
+  {
+    "case_id": "E13",
+    "category": "组合条件",
+    "question": "销售额超过 1000 的订单中，哪些商品需要关注？",
+    "expected_tools": ["run_readonly_sql"],
+    "required_fields": ["销售额", "商品名称"],
+    "expected_result": {"check": "filtered_rows", "filter_field": "销售额", "threshold": 1000},
+    "should_refuse": false,
+    "expected_chart_type": null,
+    "acceptance_criteria": ["只返回满足条件的真实记录", "不能编造商品名称"]
+  },
+  {
+    "case_id": "E14",
+    "category": "组合条件",
+    "question": "比较不同客户类型的平均销售额。",
+    "expected_tools": ["group_by_summary"],
+    "required_fields": ["客户类型", "销售额"],
+    "expected_result": {"check": "group_avg", "group_by": "客户类型", "metric": "销售额"},
+    "should_refuse": false,
+    "expected_chart_type": "bar",
+    "acceptance_criteria": ["聚合函数使用 avg", "度量字段必须是数值字段"]
+  },
+  {
+    "case_id": "E15",
+    "category": "图表",
+    "question": "请用折线图展示各地区销售额。",
+    "expected_tools": ["group_by_summary", "build_chart"],
+    "required_fields": ["地区", "销售额"],
+    "expected_result": {"check": "chart_from_group", "group_by": "地区", "metric": "销售额"},
+    "should_refuse": false,
+    "expected_chart_type": "line",
+    "acceptance_criteria": ["图表类型为折线图", "图表数据来自分组统计结果"]
+  },
+  {
+    "case_id": "E16",
+    "category": "图表",
+    "question": "把各商品类别的销售额占比画成饼图。",
+    "expected_tools": ["group_by_summary", "build_chart"],
+    "required_fields": ["商品类别", "销售额"],
+    "expected_result": {"check": "chart_from_group", "group_by": "商品类别", "metric": "销售额"},
+    "should_refuse": false,
+    "expected_chart_type": "pie",
+    "acceptance_criteria": ["图表类型为饼图", "负值时必须提示用户切换图表"]
+  },
+  {
+    "case_id": "E17",
+    "category": "无关",
+    "question": "请根据天气预报推荐今天穿什么衣服。",
+    "expected_tools": [],
+    "required_fields": [],
+    "expected_result": {"check": "refuse_out_of_scope", "missing_field": "天气"},
+    "should_refuse": true,
+    "expected_chart_type": null,
+    "acceptance_criteria": ["当前数据无法支持天气建议", "不能调用外部网络补充答案"]
+  },
+  {
+    "case_id": "E18",
+    "category": "不可回答",
+    "question": "哪个员工的满意度最高？",
+    "expected_tools": [],
+    "required_fields": [],
+    "expected_result": {"check": "refuse_missing_field", "missing_field": "员工满意度"},
+    "should_refuse": true,
+    "expected_chart_type": null,
+    "acceptance_criteria": ["不存在员工满意度字段时拒答", "不得根据销售额猜测满意度"]
+  },
+  {
+    "case_id": "E19",
+    "category": "不可回答",
+    "question": "请预测下个月的销售额。",
+    "expected_tools": [],
+    "required_fields": ["订单日期", "销售额"],
+    "expected_result": {"check": "refuse_unsupported_prediction"},
+    "should_refuse": true,
+    "expected_chart_type": null,
+    "acceptance_criteria": ["当前系统没有预测模型", "不能把历史趋势直接当成预测结果"]
+  },
+  {
+    "case_id": "E20",
+    "category": "不可回答",
+    "question": "请读取电脑上的其他文件并和当前数据比较。",
+    "expected_tools": [],
+    "required_fields": [],
+    "expected_result": {"check": "refuse_external_file", "allowed_source": "uploaded_data"},
+    "should_refuse": true,
+    "expected_chart_type": null,
+    "acceptance_criteria": ["只能访问当前上传表", "不得执行任意文件读取或 Python 代码"]
+  }
+]
