@@ -20,6 +20,7 @@ class StreamlitAppTestCase(unittest.TestCase):
         project_dir = Path(__file__).resolve().parents[1]
         app = AppTest.from_file(str(project_dir / "app.py")).run()
 
+        app.radio[0].set_value("上传文件").run()
         self.assertEqual(len(app.file_uploader), 1)
         app.file_uploader[0].upload(
             "sample_ecommerce.csv",

@@ -131,14 +131,11 @@ st.title("DataPilot")
 st.caption("中文数据分析工作台")
 
 with st.sidebar:
-    st.subheader("运行配置")
-    st.text_input("Ollama 地址", value=settings.ollama_base_url, disabled=True)
-    st.text_input("默认模型", value=settings.default_model, disabled=True)
-    st.subheader("本地模型")
-    st.caption("点击检测后读取本机 Ollama 模型，不会自动访问网络。")
+    st.subheader("分析模型")
+    st.caption("使用本机 Ollama 模型生成分析结果。")
     if "ollama_model_result" not in st.session_state:
         st.session_state["ollama_model_result"] = None
-    if st.button("检测已安装模型", key="detect_ollama_models"):
+    if st.button("检测本地模型", key="detect_ollama_models"):
         with st.spinner("正在读取本机模型列表..."):
             with OllamaClient(
                 settings.ollama_base_url,
@@ -150,7 +147,7 @@ with st.sidebar:
 
     model_result = st.session_state["ollama_model_result"]
     if model_result is None:
-        st.caption("尚未检测本机模型。")
+        st.caption("请先检测可用模型。")
     elif not model_result.available:
         st.error(f"模型服务不可用：{model_result.error_message}")
     elif not model_result.models:
@@ -160,7 +157,7 @@ with st.sidebar:
         default_index = model_names.index(settings.default_model) if settings.default_model in model_names else 0
         selected_model = st.selectbox("分析模型", model_names, index=default_index)
         st.session_state["selected_ollama_model"] = selected_model
-        st.caption(f"已发现 {len(model_names)} 个生成模型，embedding 模型已过滤。")
+        st.caption(f"可用模型：{len(model_names)} 个")
         if st.button("测试本地模型", key="test_ollama_model"):
             try:
                 with OllamaClient(
@@ -178,70 +175,71 @@ with st.sidebar:
             else:
                 st.success(f"{chat_result.model} 已响应，耗时 {chat_result.elapsed_ms} 毫秒。")
                 st.write(chat_result.content)
-    st.subheader("查询限制")
-    st.caption(f"最多返回 {settings.max_query_rows:,} 行")
-    st.caption(f"结果不超过 {settings.max_query_result_mb} MB")
-    st.caption(f"单次查询最多运行 {settings.query_timeout_seconds:g} 秒")
+    with st.expander("查询限制"):
+        st.caption(f"最多返回 {settings.max_query_rows:,} 行")
+        st.caption(f"结果不超过 {settings.max_query_result_mb} MB")
+        st.caption(f"单次查询最多运行 {settings.query_timeout_seconds:g} 秒")
 
 st.subheader("选择数据")
-st.caption("选择练习数据直接开始，或上传自己的 CSV / XLSX 文件。")
 source_mode = st.radio(
     "数据来源",
-    ["上传文件", "练习数据"],
+    ["练习数据", "上传文件"],
     horizontal=True,
     key="data_source_mode",
 )
 source_name: str | None = None
 source_content: bytes | None = None
 
-with st.expander("练习数据中心", expanded=True):
-    st.dataframe(practice_catalog_frame(), use_container_width=True, hide_index=True)
-    if source_mode == "练习数据":
-        practice_options = [item.slug for item in PRACTICE_DATASETS]
-        selected_slug = st.selectbox(
-            "选择练习主题",
-            practice_options,
-            format_func=lambda slug: PRACTICE_DATASET_BY_SLUG[slug].name,
-            key="practice_dataset_slug",
-        )
-        selected_dataset = PRACTICE_DATASET_BY_SLUG[selected_slug]
-        selected_path = practice_file_path(selected_slug, "csv")
-        selected_xlsx_path = practice_file_path(selected_slug, "xlsx")
-        if selected_path.exists() and selected_xlsx_path.exists():
-            preview_frame = pd.read_csv(selected_path)
-            st.write(selected_dataset.description)
-            st.caption("建议练习：" + "；".join(selected_dataset.suggested_questions))
-            st.dataframe(preview_frame.head(10), use_container_width=True, hide_index=True)
-            download_columns = st.columns(2)
-            with download_columns[0]:
-                st.download_button(
-                    "下载 CSV",
-                    data=selected_path.read_bytes(),
-                    file_name=selected_path.name,
-                    mime="text/csv",
-                    key="download_practice_csv",
-                )
-            with download_columns[1]:
-                st.download_button(
-                    "下载 XLSX",
-                    data=selected_xlsx_path.read_bytes(),
-                    file_name=selected_xlsx_path.name,
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    key="download_practice_xlsx",
-                )
-            source_name = selected_path.name
-            source_content = selected_path.read_bytes()
-        else:
-            st.error("练习数据文件尚未生成，请重新启动项目或运行生成命令。")
+if source_mode == "练习数据":
+    practice_options = [item.slug for item in PRACTICE_DATASETS]
+    selected_slug = st.selectbox(
+        "练习主题",
+        practice_options,
+        format_func=lambda slug: PRACTICE_DATASET_BY_SLUG[slug].name,
+        key="practice_dataset_slug",
+    )
+    selected_dataset = PRACTICE_DATASET_BY_SLUG[selected_slug]
+    selected_path = practice_file_path(selected_slug, "csv")
+    selected_xlsx_path = practice_file_path(selected_slug, "xlsx")
+    if selected_path.exists() and selected_xlsx_path.exists():
+        preview_frame = pd.read_csv(selected_path)
+        st.caption(selected_dataset.description)
+        st.caption("建议问题：" + selected_dataset.suggested_questions[0])
+        with st.expander("查看数据样例"):
+            st.dataframe(preview_frame.head(5), use_container_width=True, hide_index=True)
+        download_columns = st.columns(2)
+        with download_columns[0]:
+            st.download_button(
+                "下载 CSV",
+                data=selected_path.read_bytes(),
+                file_name=selected_path.name,
+                mime="text/csv",
+                key="download_practice_csv",
+            )
+        with download_columns[1]:
+            st.download_button(
+                "下载 XLSX",
+                data=selected_xlsx_path.read_bytes(),
+                file_name=selected_xlsx_path.name,
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="download_practice_xlsx",
+            )
+        source_name = selected_path.name
+        source_content = selected_path.read_bytes()
     else:
-        uploaded_file = st.file_uploader(
-            "选择一份 CSV 或 XLSX 文件",
-            type=["csv", "xlsx"],
-            help=f"单文件不超过 {settings.max_upload_mb} MB，最多读取 {settings.max_rows:,} 行。",
-        )
-        if uploaded_file is not None:
-            source_name = uploaded_file.name
-            source_content = uploaded_file.getvalue()
+        st.error("练习数据文件尚未生成，请重新启动项目或运行生成命令。")
+else:
+    uploaded_file = st.file_uploader(
+        "选择一份 CSV 或 XLSX 文件",
+        type=["csv", "xlsx"],
+        help=f"单文件不超过 {settings.max_upload_mb} MB，最多读取 {settings.max_rows:,} 行。",
+    )
+    if uploaded_file is not None:
+        source_name = uploaded_file.name
+        source_content = uploaded_file.getvalue()
+
+with st.expander("查看全部练习主题"):
+    st.dataframe(practice_catalog_frame(), use_container_width=True, hide_index=True)
 
 if source_content is None or source_name is None:
     st.info("请选择数据来源后开始分析。")
@@ -268,42 +266,40 @@ else:
             f"已加载：{loaded.source_name} | 格式：{loaded.file_format.upper()} | 编码：{encoding_label}"
         )
 
-        metric_columns = st.columns(3)
+        metric_columns = st.columns(2)
         metric_columns[0].metric("数据行数", f"{len(loaded.dataframe):,}")
         metric_columns[1].metric("字段数量", f"{len(loaded.dataframe.columns):,}")
-        metric_columns[2].metric("最大行限制", f"{settings.max_rows:,}")
 
         if loaded.warnings:
             for warning in loaded.warnings:
                 st.warning(warning)
 
         quality = analyze_quality(loaded)
-        st.subheader("数据质量概览")
-        quality_metrics = st.columns(5)
+        st.subheader("数据概览")
+        quality_metrics = st.columns(4)
         quality_metrics[0].metric("缺失单元格", f"{quality.missing_cell_count:,}")
         quality_metrics[1].metric("重复行", f"{quality.duplicate_row_count:,}")
-        quality_metrics[2].metric("重复标识", f"{quality.duplicate_identifier_count:,}")
-        quality_metrics[3].metric("质量问题", f"{len(quality.issues):,}")
-        quality_metrics[4].metric("可分析行", f"{quality.row_count:,}")
+        quality_metrics[2].metric("质量问题", f"{len(quality.issues):,}")
+        quality_metrics[3].metric("可分析行", f"{quality.row_count:,}")
 
-        if quality.issues:
-            issue_frame = pd.DataFrame(
-                [
-                    {
-                        "级别": SEVERITY_LABELS.get(issue.severity, issue.severity),
-                        "问题": issue.message,
-                        "字段": issue.column or "整表",
-                        "数量": issue.count,
-                        "样例行": ", ".join(map(str, issue.sample_rows)) or "无",
-                    }
-                    for issue in quality.issues
-                ]
-            )
-            st.dataframe(issue_frame, use_container_width=True, hide_index=True)
-        else:
-            st.success("暂未发现缺失值、重复记录或负数等质量问题。")
+        with st.expander("查看数据质量问题"):
+            if quality.issues:
+                issue_frame = pd.DataFrame(
+                    [
+                        {
+                            "级别": SEVERITY_LABELS.get(issue.severity, issue.severity),
+                            "问题": issue.message,
+                            "字段": issue.column or "整表",
+                            "数量": issue.count,
+                            "样例行": ", ".join(map(str, issue.sample_rows)) or "无",
+                        }
+                        for issue in quality.issues
+                    ]
+                )
+                st.dataframe(issue_frame, use_container_width=True, hide_index=True)
+            else:
+                st.success("暂未发现缺失值、重复记录或负数等质量问题。")
 
-        st.subheader("字段识别")
         quality_by_name = {column.name: column for column in quality.columns}
         profile_frame = pd.DataFrame(
             [
@@ -322,76 +318,32 @@ else:
                 for profile in loaded.columns
             ]
         )
-        st.dataframe(profile_frame, use_container_width=True, hide_index=True)
 
-        st.subheader("数据预览")
-        st.dataframe(loaded.dataframe.head(10), use_container_width=True, hide_index=True)
-
-        st.subheader("只读 SQL 查询")
-        st.caption(
-            "查询只允许访问当前上传数据表 uploaded_data，系统会拦截写入语句、多语句、注释、"
-            "外部数据源和超限结果。"
+        st.subheader("开始分析")
+        default_question = (
+            selected_dataset.suggested_questions[0]
+            if source_mode == "练习数据"
+            else "请概括这份数据，指出最值得关注的变化。"
         )
-        example_name = st.selectbox(
-            "查询示例",
-            ["自定义 SQL", *SQL_EXAMPLES.keys()],
-            index=1,
-            help="示例会填入查询框，你也可以直接修改后执行。",
-        )
-        sql_default = SQL_EXAMPLES.get(example_name, "")
-        sql_text = st.text_area(
-            "SQL 查询语句",
-            value=sql_default,
-            height=130,
-            placeholder="例如：SELECT 地区, SUM(销售额) AS 总销售额 FROM uploaded_data GROUP BY 地区",
-        )
-        run_query = st.button("执行只读查询", type="primary")
-
-        if run_query:
-            engine = ReadOnlyQueryEngine(
-                loaded.dataframe,
-                max_rows=settings.max_query_rows,
-                max_result_bytes=settings.max_query_result_mb * 1024 * 1024,
-                timeout_seconds=settings.query_timeout_seconds,
-            )
-            try:
-                response = run_readonly_sql(engine, {"sql": sql_text})
-            finally:
-                engine.close()
-
-            execution = response.record
-            if response.success:
-                st.success(
-                    f"查询成功：返回 {response.row_count:,} 行，耗时 {execution.elapsed_ms} 毫秒。"
-                )
-                st.dataframe(pd.DataFrame(response.rows), use_container_width=True, hide_index=True)
-            else:
-                st.error(
-                    f"查询未执行或执行失败：{execution.error_message} "
-                    f"（错误码：{execution.error_code}）"
-                )
-            with st.expander("查看本次执行记录"):
-                st.write(
-                    {
-                        "状态": execution.status,
-                        "耗时（毫秒）": execution.elapsed_ms,
-                        "返回行数": response.row_count,
-                        "结果大小（字节）": execution.result_summary.get("result_bytes", 0),
-                        "执行 SQL": response.sql,
-                        "工具记录": execution.model_dump(),
-                    }
-                )
-
-        st.subheader("结构化分析计划")
-        st.caption("模型只负责提出计划；计划会先经过 Pydantic、字段白名单和 SQL 只读校验，确认后才执行受控工具。")
         planning_question = st.text_area(
-            "分析问题",
-            value="哪个地区的销售额最高？请给出分组统计计划。",
+            "想了解什么？",
+            value=default_question,
             height=90,
+            key=f"analysis_question_{dataset_key}",
+            placeholder="例如：哪个地区的销售额最高？",
         )
-        generate_plan = st.button("生成分析计划", key="generate_analysis_plan")
-        if generate_plan:
+        start_analysis = st.button(
+            "开始分析",
+            key="start_analysis",
+            type="primary",
+            use_container_width=True,
+        )
+        if start_analysis:
             selected_model = st.session_state.get("selected_ollama_model")
+            st.session_state.pop("planning_result", None)
+            st.session_state.pop("planning_question", None)
+            st.session_state.pop("execution_result", None)
+            st.session_state.pop("report_result", None)
             if not selected_model:
                 st.warning("请先在侧边栏检测模型，并选择一个本地生成模型。")
             elif not planning_question.strip():
@@ -433,23 +385,7 @@ else:
 
                 st.session_state["planning_result"] = planning_result
                 st.session_state["planning_question"] = planning_question
-                st.session_state.pop("execution_result", None)
-                st.session_state.pop("report_result", None)
-
-        planning_result = st.session_state.get("planning_result")
-        if planning_result is not None:
-            if planning_result.success and planning_result.plan is not None:
-                st.success(
-                    f"计划通过校验：使用 {planning_result.model}，共 {planning_result.attempts} 次模型请求。"
-                )
-                st.json(planning_result.plan.model_dump())
-
-                execute_plan = st.button(
-                    "执行计划并生成报告",
-                    key="execute_analysis_plan",
-                    type="primary",
-                )
-                if execute_plan:
+                if planning_result.success and planning_result.plan is not None:
                     execution_engine = ReadOnlyQueryEngine(
                         loaded.dataframe,
                         max_rows=settings.max_query_rows,
@@ -457,7 +393,7 @@ else:
                         timeout_seconds=settings.query_timeout_seconds,
                     )
                     try:
-                        with st.spinner("正在执行已校验工具计划..."):
+                        with st.spinner("正在执行已校验的分析步骤..."):
                             execution_result = execute_analysis_plan(
                                 planning_result.plan,
                                 loaded,
@@ -466,69 +402,129 @@ else:
                     finally:
                         execution_engine.close()
                     st.session_state["execution_result"] = execution_result
-                    st.session_state.pop("report_result", None)
 
                     if execution_result.success:
-                        selected_model = st.session_state.get("selected_ollama_model")
-                        if selected_model:
-                            with st.spinner(f"{selected_model} 正在根据真实结果生成报告..."):
-                                try:
-                                    with OllamaClient(
-                                        settings.ollama_base_url,
-                                        timeout_seconds=settings.ollama_timeout_seconds,
-                                        temperature=STRUCTURED_TEMPERATURE,
-                                        max_output_tokens=settings.ollama_max_output_tokens,
-                                    ) as ollama:
-                                        report_result = ReportGenerator(
-                                            ollama,
-                                            selected_model,
-                                            max_repairs=1,
-                                        ).generate(
-                                            st.session_state.get("planning_question", planning_question),
-                                            execution_result,
-                                        )
-                                except OllamaClientError as exc:
-                                    report_result = ReportGenerationResult(
-                                        status="fallback",
-                                        backend="fallback",
-                                        model=selected_model,
-                                        attempts=1,
-                                        report=None,
-                                        error_message=exc.message,
+                        with st.spinner(f"{selected_model} 正在生成中文报告..."):
+                            try:
+                                with OllamaClient(
+                                    settings.ollama_base_url,
+                                    timeout_seconds=settings.ollama_timeout_seconds,
+                                    temperature=STRUCTURED_TEMPERATURE,
+                                    max_output_tokens=settings.ollama_max_output_tokens,
+                                ) as ollama:
+                                    report_result = ReportGenerator(
+                                        ollama,
+                                        selected_model,
+                                        max_repairs=1,
+                                    ).generate(
+                                        planning_question,
+                                        execution_result,
                                     )
-                            st.session_state["report_result"] = report_result
-                        else:
-                            st.session_state["report_result"] = ReportGenerationResult(
-                                status="error",
-                                backend="none",
-                                attempts=0,
-                                error_message="没有选择本地模型，无法生成报告。",
-                            )
+                            except OllamaClientError as exc:
+                                report_result = ReportGenerationResult(
+                                    status="fallback",
+                                    backend="fallback",
+                                    model=selected_model,
+                                    attempts=1,
+                                    report=None,
+                                    error_message=exc.message,
+                                )
+                        st.session_state["report_result"] = report_result
 
-            else:
+        planning_result = st.session_state.get("planning_result")
+        if planning_result is not None:
+            if not planning_result.success:
                 st.error(
-                    f"计划未通过校验：共尝试 {planning_result.attempts} 次，当前不会执行工具。"
+                    f"本次分析没有完成：共尝试 {planning_result.attempts} 次，未执行数据操作。"
                 )
-                st.dataframe(
-                    pd.DataFrame([problem.model_dump() for problem in planning_result.problems]),
-                    use_container_width=True,
-                    hide_index=True,
+            with st.expander("查看分析过程"):
+                if planning_result.success and planning_result.plan is not None:
+                    st.success(
+                        f"分析计划已通过校验：使用 {planning_result.model}，共请求 {planning_result.attempts} 次。"
+                    )
+                    st.json(planning_result.plan.model_dump())
+                else:
+                    st.write("分析计划未通过校验，详细原因如下：")
+                    if planning_result.problems:
+                        st.dataframe(
+                            pd.DataFrame([problem.model_dump() for problem in planning_result.problems]),
+                            use_container_width=True,
+                            hide_index=True,
+                        )
+
+        with st.expander("查看字段详情"):
+            st.dataframe(profile_frame, use_container_width=True, hide_index=True)
+
+        with st.expander("查看数据样例"):
+            st.dataframe(loaded.dataframe.head(5), use_container_width=True, hide_index=True)
+
+        with st.expander("高级：只读 SQL 查询"):
+            example_name = st.selectbox(
+                "查询示例",
+                ["自定义 SQL", *SQL_EXAMPLES.keys()],
+                index=1,
+                help="示例会填入查询框，你也可以直接修改后执行。",
+            )
+            sql_default = SQL_EXAMPLES.get(example_name, "")
+            sql_text = st.text_area(
+                "SQL 查询语句",
+                value=sql_default,
+                height=110,
+                placeholder="例如：SELECT 地区, SUM(销售额) AS 总销售额 FROM uploaded_data GROUP BY 地区",
+            )
+            run_query = st.button("执行只读查询")
+
+            if run_query:
+                engine = ReadOnlyQueryEngine(
+                    loaded.dataframe,
+                    max_rows=settings.max_query_rows,
+                    max_result_bytes=settings.max_query_result_mb * 1024 * 1024,
+                    timeout_seconds=settings.query_timeout_seconds,
                 )
+                try:
+                    response = run_readonly_sql(engine, {"sql": sql_text})
+                finally:
+                    engine.close()
+
+                execution = response.record
+                if response.success:
+                    st.success(
+                        f"查询成功：返回 {response.row_count:,} 行，耗时 {execution.elapsed_ms} 毫秒。"
+                    )
+                    st.dataframe(pd.DataFrame(response.rows), use_container_width=True, hide_index=True)
+                else:
+                    st.error(
+                        f"查询未执行或执行失败：{execution.error_message} "
+                        f"（错误码：{execution.error_code}）"
+                    )
+                with st.expander("查看本次执行记录"):
+                    st.write(
+                        {
+                            "状态": execution.status,
+                            "耗时（毫秒）": execution.elapsed_ms,
+                            "返回行数": response.row_count,
+                            "结果大小（字节）": execution.result_summary.get("result_bytes", 0),
+                            "执行 SQL": response.sql,
+                            "工具记录": execution.model_dump(),
+                        }
+                    )
 
         execution_result = st.session_state.get("execution_result")
         if isinstance(execution_result, PlanExecutionResult):
-            st.subheader("工具执行结果")
+            st.subheader("分析结果")
             if execution_result.success:
-                st.success(f"计划执行完成，共执行 {len(execution_result.steps)} 个工具步骤。")
+                st.success("分析完成，以下是根据数据计算出的结果。")
             else:
-                st.error(execution_result.error_message or "计划执行失败，未生成可信报告。")
+                st.error(execution_result.error_message or "分析未完成，暂时无法生成可信报告。")
             for step in execution_result.steps:
                 status_label = {"success": "成功", "rejected": "拒绝", "error": "失败"}.get(
                     step.status,
                     step.status,
                 )
-                with st.expander(f"步骤 {step.step_index + 1}：{step.tool}（{status_label}）"):
-                    st.write(f"预期输出：{step.expected_output}")
+                with st.expander(
+                    f"查看第 {step.step_index + 1} 项结果（{status_label}）",
+                    expanded=step.step_index == 0 and step.status == "success",
+                ):
                     if step.status == "success":
                         if step.result.get("rows"):
                             rows = step.result["rows"]
@@ -552,14 +548,7 @@ else:
                                 f"plan_chart_{step.step_index}",
                             )
                     else:
-                        st.error(step.record.error_message or "工具未返回成功结果。")
-                    st.write(
-                        {
-                            "状态": step.record.status,
-                            "耗时（毫秒）": step.record.elapsed_ms,
-                            "工具记录": step.record.model_dump(),
-                        }
-                    )
+                        st.error(step.record.error_message or "这一项没有返回结果。")
 
             table_steps = [
                 step
@@ -567,74 +556,73 @@ else:
                 if step.success and isinstance(step.result.get("rows"), list) and step.result["rows"]
             ]
             if table_steps:
-                st.subheader("结果可视化")
-                st.caption("图表只使用成功工具返回的结构化结果，不执行模型生成的代码。")
-                step_labels = {
-                    f"步骤 {step.step_index + 1}：{step.tool}": step
-                    for step in table_steps
-                }
-                selected_label = st.selectbox(
-                    "选择结果",
-                    list(step_labels),
-                    key="chart_result_step",
-                )
-                selected_step = step_labels[selected_label]
-                selected_frame = pd.DataFrame(selected_step.result["rows"])
-                available_numeric = numeric_columns(selected_frame)
-                available_x = [
-                    str(column)
-                    for column in selected_frame.columns
-                    if str(column) not in available_numeric
-                ] or [str(column) for column in selected_frame.columns]
-                if not available_numeric:
-                    st.info("当前结果没有可用的数值字段，暂时无法绘制图表。")
-                else:
-                    chart_columns = st.columns(3)
-                    with chart_columns[0]:
-                        selected_chart_type = st.selectbox(
-                            "图表类型",
-                            ["bar", "line", "pie"],
-                            format_func={
-                                "bar": "柱状图",
-                                "line": "折线图",
-                                "pie": "饼图",
-                            }.get,
-                            key="manual_chart_type",
-                        )
-                    with chart_columns[1]:
-                        selected_x_field = st.selectbox(
-                            "横轴字段",
-                            available_x,
-                            key="manual_chart_x_field",
-                        )
-                    with chart_columns[2]:
-                        selected_y_field = st.selectbox(
-                            "纵轴字段",
-                            available_numeric,
-                            key="manual_chart_y_field",
-                        )
-                    selected_title = st.text_input(
-                        "图表标题",
-                        value=f"{selected_x_field}与{selected_y_field}分析",
-                        key="manual_chart_title",
+                with st.expander("查看图表", expanded=False):
+                    step_labels = {
+                        f"第 {step.step_index + 1} 项结果": step
+                        for step in table_steps
+                    }
+                    selected_label = st.selectbox(
+                        "选择结果",
+                        list(step_labels),
+                        key="chart_result_step",
                     )
-                    manual_chart = build_chart(
-                        selected_frame,
-                        {
-                            "chart_type": selected_chart_type,
-                            "x_field": selected_x_field,
-                            "y_field": selected_y_field,
-                            "title": selected_title,
-                            "limit": 100,
-                        },
-                    )
-                    if manual_chart.success and manual_chart.chart is not None:
-                        render_chart_exports(
-                            manual_chart.chart.model_dump(),
-                            "manual_chart",
-                        )
+                    selected_step = step_labels[selected_label]
+                    selected_frame = pd.DataFrame(selected_step.result["rows"])
+                    available_numeric = numeric_columns(selected_frame)
+                    available_x = [
+                        str(column)
+                        for column in selected_frame.columns
+                        if str(column) not in available_numeric
+                    ] or [str(column) for column in selected_frame.columns]
+                    if not available_numeric:
+                        st.info("当前结果没有可用的数值字段，暂时无法绘制图表。")
                     else:
-                        st.warning(manual_chart.record.error_message or "当前字段无法生成图表。")
+                        chart_columns = st.columns(3)
+                        with chart_columns[0]:
+                            selected_chart_type = st.selectbox(
+                                "图表类型",
+                                ["bar", "line", "pie"],
+                                format_func={
+                                    "bar": "柱状图",
+                                    "line": "折线图",
+                                    "pie": "饼图",
+                                }.get,
+                                key="manual_chart_type",
+                            )
+                        with chart_columns[1]:
+                            selected_x_field = st.selectbox(
+                                "横轴字段",
+                                available_x,
+                                key="manual_chart_x_field",
+                            )
+                        with chart_columns[2]:
+                            selected_y_field = st.selectbox(
+                                "纵轴字段",
+                                available_numeric,
+                                key="manual_chart_y_field",
+                            )
+                        selected_title = st.text_input(
+                            "图表标题",
+                            value=f"{selected_x_field}与{selected_y_field}分析",
+                            key="manual_chart_title",
+                        )
+                        manual_chart = build_chart(
+                            selected_frame,
+                            {
+                                "chart_type": selected_chart_type,
+                                "x_field": selected_x_field,
+                                "y_field": selected_y_field,
+                                "title": selected_title,
+                                "limit": 100,
+                            },
+                        )
+                        if manual_chart.success and manual_chart.chart is not None:
+                            render_chart_exports(
+                                manual_chart.chart.model_dump(),
+                                "manual_chart",
+                            )
+                        else:
+                            st.warning(manual_chart.record.error_message or "当前字段无法生成图表。")
 
             st.download_button(
                 "下载 Markdown 分析报告",
@@ -672,4 +660,4 @@ else:
                     st.markdown("**数据限制**")
                     for limitation in report_result.report.limitations:
                         st.write(f"- {limitation}")
-                st.caption(f"引用工具步骤：{report_result.report.evidence_steps or '无'}")
+                st.caption(f"数据依据：第 {report_result.report.evidence_steps or '无'} 项分析结果")
