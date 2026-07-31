@@ -9,6 +9,7 @@ from config import get_settings
 from src.data_loader import DataLoadError, load_file
 from src.data_quality import analyze_quality
 from src.query_engine import ReadOnlyQueryEngine
+from src.tools import run_readonly_sql
 
 
 settings = get_settings()
@@ -55,7 +56,7 @@ st.set_page_config(
 )
 
 st.title("DataPilot")
-st.caption("本地自然语言数据分析 Agent | 阶段 6：数据概览与安全查询")
+st.caption("本地自然语言数据分析 Agent | 阶段 7：受控工具工作台")
 
 with st.sidebar:
     st.subheader("运行配置")
@@ -178,16 +179,16 @@ else:
                 timeout_seconds=settings.query_timeout_seconds,
             )
             try:
-                response = engine.execute(sql_text)
+                response = run_readonly_sql(engine, {"sql": sql_text})
             finally:
                 engine.close()
 
-            execution = response.execution
+            execution = response.record
             if response.success:
                 st.success(
-                    f"查询成功：返回 {execution.row_count:,} 行，耗时 {execution.elapsed_ms} 毫秒。"
+                    f"查询成功：返回 {response.row_count:,} 行，耗时 {execution.elapsed_ms} 毫秒。"
                 )
-                st.dataframe(response.dataframe, use_container_width=True, hide_index=True)
+                st.dataframe(pd.DataFrame(response.rows), use_container_width=True, hide_index=True)
             else:
                 st.error(
                     f"查询未执行或执行失败：{execution.error_message} "
@@ -198,13 +199,14 @@ else:
                     {
                         "状态": execution.status,
                         "耗时（毫秒）": execution.elapsed_ms,
-                        "返回行数": execution.row_count,
-                        "结果大小（字节）": execution.result_bytes,
-                        "执行 SQL": execution.sql,
+                        "返回行数": response.row_count,
+                        "结果大小（字节）": execution.result_summary.get("result_bytes", 0),
+                        "执行 SQL": response.sql,
+                        "工具记录": execution.model_dump(),
                     }
                 )
 
 st.divider()
 st.subheader("当前阶段验收")
-st.write("数据概览、质量检查、DuckDB 只读查询和 SQL 安全边界已经接入工作台。")
-st.write("下一阶段将把查询能力拆成受控工具，并接入结构化分析计划。")
+st.write("数据概览、质量检查、DuckDB 只读查询和受控工具已经接入工作台。")
+st.write("下一阶段将接入 Ollama，并让模型先生成结构化分析计划。")

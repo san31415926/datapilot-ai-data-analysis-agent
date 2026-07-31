@@ -59,8 +59,25 @@ class ReadOnlyQueryEngine:
         self._connection = duckdb.connect(database=":memory:")
         self._connection.execute("SET threads=1")
         self._connection.register(table_name, dataframe)
+        self._column_names = tuple(str(column) for column in dataframe.columns)
+        self._numeric_columns = frozenset(
+            str(column)
+            for column in dataframe.columns
+            if pd.api.types.is_numeric_dtype(dataframe[column])
+        )
         self._guard = SQLGuard(allowed_table=table_name)
         self._lock = threading.Lock()
+
+    @property
+    def column_names(self) -> tuple[str, ...]:
+        """返回工具参数校验可以使用的字段名。"""
+
+        return self._column_names
+
+    def is_numeric_column(self, column: str) -> bool:
+        """判断字段是否为可聚合的数值字段。"""
+
+        return column in self._numeric_columns
 
     def execute(self, sql: str) -> QueryResponse:
         """校验并执行查询，失败时只返回安全的中文错误。"""
