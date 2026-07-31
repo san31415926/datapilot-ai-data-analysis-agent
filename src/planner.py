@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from difflib import SequenceMatcher
 from typing import Any, Literal, Mapping, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -31,10 +32,12 @@ PLANNER_SYSTEM_PROMPT = """你是 DataPilot 的中文数据分析计划器。
 计划只允许调用以下工具：get_data_overview、run_readonly_sql、group_by_summary、detect_anomalies、build_chart。
 工具参数必须使用给定字段名；不能执行 Python、系统命令、写入型 SQL 或访问上传表之外的数据。
 如果用户问题无法由当前字段支持，仍然生成最小计划，交给系统校验，不要编造数据。
+规划前会提供一份问题意图理解结果，它只能作为字段选择提示，最终仍必须以当前字段白名单为准。
 JSON 顶层字段必须是 user_goal、steps、report_focus。
 每个 steps 元素必须包含 tool、parameters、expected_output。
 工具参数契约必须严格遵守：
 - 所有工具参数中的字段名必须使用用户消息提供的 ASCII field_key（例如 column_0、column_1），不要直接填写中文显示名；系统会在校验前映射回真实字段名。
+- 单个字段参数只能填写一个 field_key，不能写成 column_2,column_3；需要多个字段时使用 run_readonly_sql。
 - get_data_overview：parameters 只能使用 include_quality_issues（布尔值）。
 - run_readonly_sql：parameters 必须使用 sql 字符串，SQL 只能读取 uploaded_data。
 - group_by_summary：parameters 必须使用 group_by、metric、aggregation、sort_direction、limit；aggregation 只能是 count、sum、avg、min、max。
@@ -138,7 +141,8 @@ def validate_analysis_plan(
 
 def build_planner_prompt(
     question: str,
-    schema: Sequence[dict[str, str]],
+    schema: Sequence[dict[str, Any]],
+    intent: Mapping[str, Any] | None = None,
 ) -> str:
     """构造只包含字段元数据的规划请求，不把原始业务数据送入模型。"""
 
@@ -152,11 +156,18 @@ def build_planner_prompt(
             f"logical_type={field.get('logical_type', 'unknown')}; role={field.get('role', 'unknown')}"
         )
     fields_text = "\n".join(field_lines) or "- 没有可用字段"
+    intent_text = ""
+    if intent:
+        intent_text = (
+            "\n\n前置问题意图理解（仅作参考，不能绕过字段白名单）：\n"
+            f"{json.dumps(dict(intent), ensure_ascii=False)}\n"
+            "如果 calculation 不为空，或 dimensions/ measures 包含多个字段，优先使用只读 SQL 完成计算。"
+        )
     return (
         f"当前用户问题：{question.strip()}\n\n"
         "当前上传数据的字段元数据（工具参数必须使用 field_key）：\n"
-        f"{fields_text}\n\n"
-        "请根据问题生成 JSON 分析计划。优先使用专用工具；只有需要灵活筛选时才使用 run_readonly_sql。"
+        f"{fields_text}{intent_text}\n\n"
+        "请根据问题和前置意图生成 JSON 分析计划。优先使用专用工具；只有需要灵活筛选或计算多个字段时才使用 run_readonly_sql。"
         "每个步骤写清 expected_output，report_focus 只写最终报告需要关注的事实。"
     )
 
@@ -175,7 +186,8 @@ class StructuredPlanner:
         self,
         question: str,
         engine: ReadOnlyQueryEngine,
-        schema: Sequence[dict[str, str]],
+        schema: Sequence[dict[str, Any]],
+        intent: Mapping[str, Any] | BaseModel | None = None,
     ) -> PlanningResult:
         if not isinstance(question, str) or not question.strip():
             return PlanningResult(
@@ -185,7 +197,25 @@ class StructuredPlanner:
                 problems=[PlanProblem(code="EMPTY_QUESTION", message="分析问题不能为空。")],
             )
 
-        original_prompt = build_planner_prompt(question, schema)
+        intent_payload: Mapping[str, Any] | None = None
+        if intent is not None:
+            if isinstance(intent, BaseModel):
+                intent_payload = intent.model_dump()
+            elif isinstance(intent, Mapping):
+                intent_payload = intent
+        original_prompt = build_planner_prompt(question, schema, intent_payload)
+        if intent_payload:
+            deterministic_plan = _build_plan_from_intent(intent_payload)
+            if deterministic_plan is not None:
+                normalized_plan = normalize_plan_fields(deterministic_plan, schema)
+                validated = validate_analysis_plan(normalized_plan, engine)
+                if validated.success:
+                    return PlanningResult(
+                        status="success",
+                        plan=validated.plan,
+                        model=self.model,
+                        attempts=1,
+                    )
         repair_context = ""
         problems: list[PlanProblem] = []
         for attempt in range(self.max_repairs + 1):
@@ -284,7 +314,7 @@ def _validate_columns(engine: ReadOnlyQueryEngine, index: int, *columns: str | N
 
 def normalize_plan_fields(
     plan: AnalysisPlan | dict[str, Any],
-    schema: Sequence[dict[str, str]],
+    schema: Sequence[dict[str, Any]],
 ) -> AnalysisPlan:
     """把模型使用的 ASCII 字段别名映射回上传数据中的真实字段名。"""
 
@@ -294,18 +324,85 @@ def normalize_plan_fields(
         for index, field in enumerate(schema)
         if str(field.get("name") or "").strip()
     }
+    column_aliases = dict(aliases)
+    aliases.update({_normalize_field_label(name): name for name in aliases.values()})
+    field_meta = {
+        str(field.get("name") or "").strip(): field
+        for field in schema
+        if str(field.get("name") or "").strip()
+    }
     payload = parsed_plan.model_dump()
     for step in payload["steps"]:
         parameters = step["parameters"]
         if step["tool"] == "run_readonly_sql":
             sql = parameters.get("sql")
             if isinstance(sql, str):
-                parameters["sql"] = _replace_field_aliases(sql, aliases)
+                parameters["sql"] = _replace_field_aliases(sql, column_aliases)
         else:
             for key in ("group_by", "metric", "x_field", "y_field"):
                 if key in parameters and isinstance(parameters[key], str):
-                    parameters[key] = aliases.get(parameters[key], parameters[key])
+                    preferred_role = "numeric" if key in {"metric", "y_field"} else "dimension"
+                    parameters[key] = _resolve_plan_field(
+                        parameters[key],
+                        aliases,
+                        field_meta,
+                        preferred_role,
+                    )
     return AnalysisPlan.model_validate(payload)
+
+
+def _resolve_plan_field(
+    value: str,
+    aliases: Mapping[str, str],
+    field_meta: Mapping[str, Mapping[str, Any]],
+    preferred_role: str,
+) -> str:
+    """修复小模型把多个候选拼在一起或使用近似字段名的情况。"""
+
+    raw_values = [part.strip() for part in re.split(r"[,，、/\\|]", value) if part.strip()]
+    resolved: list[str] = []
+    for raw_value in raw_values:
+        direct = aliases.get(raw_value) or aliases.get(_normalize_field_label(raw_value))
+        if direct:
+            resolved.append(direct)
+            continue
+
+        normalized = _normalize_field_label(raw_value)
+        best_name = None
+        best_score = 0.0
+        for name in field_meta:
+            score = _similarity(normalized, _normalize_field_label(name))
+            if score > best_score:
+                best_name = name
+                best_score = score
+        if best_name is not None and best_score >= 0.72:
+            resolved.append(best_name)
+
+    if not resolved:
+        return value
+    if preferred_role == "numeric":
+        for field_name in resolved:
+            metadata = field_meta.get(field_name, {})
+            if metadata.get("logical_type") == "numeric" or metadata.get("role") == "measure":
+                return field_name
+    else:
+        for field_name in resolved:
+            metadata = field_meta.get(field_name, {})
+            if metadata.get("logical_type") != "numeric" and metadata.get("role") != "measure":
+                return field_name
+    return resolved[0]
+
+
+def _normalize_field_label(value: str) -> str:
+    return re.sub(r"[\s_\-]+", "", value.lower())
+
+
+def _similarity(left: str, right: str) -> float:
+    if not left or not right:
+        return 0.0
+    if left in right or right in left:
+        return 0.9
+    return SequenceMatcher(None, left, right).ratio()
 
 
 def _replace_field_aliases(sql: str, aliases: Mapping[str, str]) -> str:
@@ -356,6 +453,8 @@ def _coerce_common_model_shapes(payload: dict[str, Any]) -> dict[str, Any]:
             value = parameters.get(key)
             if isinstance(value, list) and len(value) == 1:
                 parameters[key] = value[0]
+            elif isinstance(value, list) and value:
+                parameters[key] = ",".join(str(item) for item in value)
 
         if step.get("tool") == "group_by_summary":
             aggregation = parameters.get("aggregation")
@@ -378,3 +477,77 @@ def _repair_prompt(problems: list[PlanProblem], chat_result: ChatResult) -> str:
         "\n\n上一次输出未通过系统校验。请只输出修复后的 JSON，不要解释。"
         f"失败原因：{problem_text}\n上一次输出：{previous}"
     )
+
+
+def _build_plan_from_intent(intent: Mapping[str, Any]) -> AnalysisPlan | None:
+    """把低歧义意图转换为受控工具计划，减少小模型二次编排时的语义漂移。"""
+
+    dimensions = [str(value) for value in intent.get("dimensions") or [] if str(value).strip()]
+    measures = [str(value) for value in intent.get("measures") or [] if str(value).strip()]
+    filters = [str(value) for value in intent.get("filters") or [] if str(value).strip()]
+    aggregation = str(intent.get("aggregation") or "unknown")
+    calculation = str(intent.get("calculation") or "")
+    if filters or len(dimensions) > 2:
+        return None
+
+    if calculation == "销售额减成本" and len(measures) >= 2:
+        select_fields = ""
+        group_clause = ""
+        if dimensions:
+            select_fields = ", ".join(
+                f'{field} AS "分组{i + 1}"' for i, field in enumerate(dimensions)
+            ) + ", "
+            group_clause = f" GROUP BY {', '.join(dimensions)}"
+        sql = (
+            f'SELECT {select_fields}SUM({measures[0]} - {measures[1]}) AS "利润" '
+            f'FROM uploaded_data{group_clause} ORDER BY "利润" DESC LIMIT 20'
+        )
+        return AnalysisPlan(
+            user_goal=str(intent.get("user_goal") or "计算利润"),
+            steps=[
+                AnalysisStep(
+                    tool="run_readonly_sql",
+                    parameters={"sql": sql},
+                    expected_output="根据销售额减成本计算利润",
+                )
+            ],
+            report_focus=["利润", "数据范围"],
+        )
+
+    if len(dimensions) == 1 and len(measures) <= 1 and aggregation in {"count", "sum", "avg", "min", "max"}:
+        parameters: dict[str, Any] = {
+            "group_by": dimensions[0],
+            "aggregation": aggregation,
+            "sort_direction": "desc",
+            "limit": 20,
+        }
+        if aggregation != "count" and measures:
+            parameters["metric"] = measures[0]
+        elif aggregation != "count":
+            return None
+        return AnalysisPlan(
+            user_goal=str(intent.get("user_goal") or "按维度汇总数据"),
+            steps=[
+                AnalysisStep(
+                    tool="group_by_summary",
+                    parameters=parameters,
+                    expected_output="按指定维度汇总并排序",
+                )
+            ],
+            report_focus=[str(intent.get("user_goal") or "汇总结果")],
+        )
+
+    if not dimensions and len(measures) == 1 and aggregation in {"sum", "avg", "min", "max"}:
+        sql = f'SELECT {aggregation.upper()}({measures[0]}) AS "结果" FROM uploaded_data'
+        return AnalysisPlan(
+            user_goal=str(intent.get("user_goal") or "汇总数据"),
+            steps=[
+                AnalysisStep(
+                    tool="run_readonly_sql",
+                    parameters={"sql": sql},
+                    expected_output="返回指定指标的汇总结果",
+                )
+            ],
+            report_focus=[str(intent.get("user_goal") or "汇总结果")],
+        )
+    return None

@@ -22,6 +22,7 @@ from src.practice_data import (
     practice_file_path,
 )
 from src.query_engine import ReadOnlyQueryEngine
+from src.query_intent import QueryIntentAnalyzer, QueryIntentResult
 from src.report_generator import ReportGenerationResult, ReportGenerator
 from src.tools import build_chart, run_readonly_sql
 from src.visualization import chart_to_csv_bytes, export_chart_png, render_chart
@@ -251,6 +252,7 @@ else:
         st.session_state.pop("planning_question", None)
         st.session_state.pop("execution_result", None)
         st.session_state.pop("report_result", None)
+        st.session_state.pop("query_intent", None)
     try:
         loaded = load_file(
             source_name,
@@ -344,6 +346,7 @@ else:
             st.session_state.pop("planning_question", None)
             st.session_state.pop("execution_result", None)
             st.session_state.pop("report_result", None)
+            st.session_state.pop("query_intent", None)
             if not selected_model:
                 st.warning("请先在侧边栏检测模型，并选择一个本地生成模型。")
             elif not planning_question.strip():
@@ -354,6 +357,7 @@ else:
                         "name": column.name,
                         "logical_type": column.logical_type,
                         "role": quality_by_name[column.name].role,
+                        "sample_values": list(quality_by_name[column.name].sample_values),
                     }
                     for column in loaded.columns
                 ]
@@ -364,13 +368,19 @@ else:
                     timeout_seconds=settings.query_timeout_seconds,
                 )
                 try:
-                    with st.spinner(f"{selected_model} 正在生成并校验分析计划..."):
-                        with OllamaClient(
-                            settings.ollama_base_url,
-                            timeout_seconds=settings.ollama_timeout_seconds,
-                            temperature=STRUCTURED_TEMPERATURE,
-                            max_output_tokens=settings.ollama_max_output_tokens,
-                        ) as ollama:
+                    with OllamaClient(
+                        settings.ollama_base_url,
+                        timeout_seconds=settings.ollama_timeout_seconds,
+                        temperature=STRUCTURED_TEMPERATURE,
+                        max_output_tokens=settings.ollama_max_output_tokens,
+                    ) as ollama:
+                        with st.spinner(f"{selected_model} 正在理解问题并匹配字段..."):
+                            intent_result = QueryIntentAnalyzer(
+                                ollama,
+                                selected_model,
+                            ).analyze(planning_question, schema_context)
+                        st.session_state["query_intent"] = intent_result
+                        with st.spinner(f"{selected_model} 正在生成并校验分析计划..."):
                             planning_result = StructuredPlanner(
                                 ollama,
                                 selected_model,
@@ -379,6 +389,7 @@ else:
                                 planning_question,
                                 planning_engine,
                                 schema_context,
+                                intent=intent_result.intent if intent_result.success else None,
                             )
                 finally:
                     planning_engine.close()
@@ -435,9 +446,25 @@ else:
         if planning_result is not None:
             if not planning_result.success:
                 st.error(
-                    f"本次分析没有完成：共尝试 {planning_result.attempts} 次，未执行数据操作。"
+                    "暂时无法根据当前问题生成可靠的分析结果，请换一种说法再试。"
                 )
             with st.expander("查看分析过程"):
+                intent_result = st.session_state.get("query_intent")
+                if isinstance(intent_result, QueryIntentResult) and intent_result.success and intent_result.intent:
+                    intent = intent_result.intent
+                    field_labels = {
+                        f"column_{index}": column.name
+                        for index, column in enumerate(loaded.columns)
+                    }
+                    matched_fields = [
+                        field_labels.get(field, field)
+                        for field in [*intent.dimensions, *intent.measures]
+                    ]
+                    st.write(f"已理解的问题：{intent.user_goal}")
+                    if matched_fields:
+                        st.caption("已匹配字段：" + "、".join(dict.fromkeys(matched_fields)))
+                    if intent.calculation:
+                        st.caption("计算方式：" + intent.calculation)
                 if planning_result.success and planning_result.plan is not None:
                     st.success(
                         f"分析计划已通过校验：使用 {planning_result.model}，共请求 {planning_result.attempts} 次。"
