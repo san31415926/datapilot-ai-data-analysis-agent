@@ -20,6 +20,9 @@ class Settings:
     max_query_rows: int = 1_000
     max_query_result_mb: int = 1
     query_timeout_seconds: float = 5.0
+    ollama_timeout_seconds: float = 120.0
+    ollama_temperature: float = 0.2
+    ollama_max_output_tokens: int = 800
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -38,6 +41,15 @@ class Settings:
             ),
             query_timeout_seconds=_read_positive_float(
                 "DATAPILOT_QUERY_TIMEOUT_SECONDS", cls.query_timeout_seconds
+            ),
+            ollama_timeout_seconds=_read_positive_float(
+                "DATAPILOT_OLLAMA_TIMEOUT_SECONDS", cls.ollama_timeout_seconds
+            ),
+            ollama_temperature=_read_non_negative_float(
+                "DATAPILOT_OLLAMA_TEMPERATURE", cls.ollama_temperature
+            ),
+            ollama_max_output_tokens=_read_positive_int(
+                "DATAPILOT_OLLAMA_MAX_OUTPUT_TOKENS", cls.ollama_max_output_tokens
             ),
         )
 
@@ -62,6 +74,17 @@ def _read_positive_float(name: str, fallback: float) -> float:
     except ValueError:
         return fallback
     return parsed if parsed > 0 else fallback
+
+
+def _read_non_negative_float(name: str, fallback: float) -> float:
+    value = os.getenv(name)
+    if value is None:
+        return fallback
+    try:
+        parsed = float(value)
+    except ValueError:
+        return fallback
+    return parsed if parsed >= 0 else fallback
 
 
 def get_settings() -> Settings:

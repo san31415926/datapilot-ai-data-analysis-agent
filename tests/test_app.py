@@ -17,7 +17,8 @@ class StreamlitAppTestCase(unittest.TestCase):
         ).run()
 
         self.assertEqual(app.selectbox[0].value, "按地区汇总销售额")
-        app.button[0].click().run()
+        query_button = next(button for button in app.button if button.label == "执行只读查询")
+        query_button.click().run()
 
         self.assertEqual(len(app.error), 0)
         self.assertEqual(len(app.exception), 0)

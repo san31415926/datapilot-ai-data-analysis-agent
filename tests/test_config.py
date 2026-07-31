@@ -16,6 +16,9 @@ class SettingsTestCase(unittest.TestCase):
         self.assertGreater(settings.max_query_rows, 0)
         self.assertGreater(settings.max_query_result_mb, 0)
         self.assertGreater(settings.query_timeout_seconds, 0)
+        self.assertGreater(settings.ollama_timeout_seconds, 0)
+        self.assertGreaterEqual(settings.ollama_temperature, 0)
+        self.assertGreater(settings.ollama_max_output_tokens, 0)
 
     def test_environment_values_are_loaded(self) -> None:
         values = {
@@ -27,6 +30,9 @@ class SettingsTestCase(unittest.TestCase):
             "DATAPILOT_MAX_QUERY_ROWS": "80",
             "DATAPILOT_MAX_QUERY_RESULT_MB": "2",
             "DATAPILOT_QUERY_TIMEOUT_SECONDS": "1.5",
+            "DATAPILOT_OLLAMA_TIMEOUT_SECONDS": "60",
+            "DATAPILOT_OLLAMA_TEMPERATURE": "0.4",
+            "DATAPILOT_OLLAMA_MAX_OUTPUT_TOKENS": "500",
         }
 
         with patch.dict(os.environ, values, clear=False):
@@ -40,6 +46,9 @@ class SettingsTestCase(unittest.TestCase):
         self.assertEqual(settings.max_query_rows, 80)
         self.assertEqual(settings.max_query_result_mb, 2)
         self.assertEqual(settings.query_timeout_seconds, 1.5)
+        self.assertEqual(settings.ollama_timeout_seconds, 60)
+        self.assertEqual(settings.ollama_temperature, 0.4)
+        self.assertEqual(settings.ollama_max_output_tokens, 500)
 
     def test_invalid_positive_integers_use_defaults(self) -> None:
         values = {
@@ -48,6 +57,9 @@ class SettingsTestCase(unittest.TestCase):
             "DATAPILOT_MAX_QUERY_ROWS": "-1",
             "DATAPILOT_MAX_QUERY_RESULT_MB": "bad",
             "DATAPILOT_QUERY_TIMEOUT_SECONDS": "0",
+            "DATAPILOT_OLLAMA_TIMEOUT_SECONDS": "bad",
+            "DATAPILOT_OLLAMA_TEMPERATURE": "-0.1",
+            "DATAPILOT_OLLAMA_MAX_OUTPUT_TOKENS": "0",
         }
 
         with patch.dict(os.environ, values, clear=False):
@@ -58,6 +70,9 @@ class SettingsTestCase(unittest.TestCase):
         self.assertEqual(settings.max_query_rows, Settings.max_query_rows)
         self.assertEqual(settings.max_query_result_mb, Settings.max_query_result_mb)
         self.assertEqual(settings.query_timeout_seconds, Settings.query_timeout_seconds)
+        self.assertEqual(settings.ollama_timeout_seconds, Settings.ollama_timeout_seconds)
+        self.assertEqual(settings.ollama_temperature, Settings.ollama_temperature)
+        self.assertEqual(settings.ollama_max_output_tokens, Settings.ollama_max_output_tokens)
 
 
 if __name__ == "__main__":

@@ -8,6 +8,7 @@ import streamlit as st
 from config import get_settings
 from src.data_loader import DataLoadError, load_file
 from src.data_quality import analyze_quality
+from src.ollama_client import OllamaClient, OllamaClientError
 from src.query_engine import ReadOnlyQueryEngine
 from src.tools import run_readonly_sql
 
@@ -62,6 +63,50 @@ with st.sidebar:
     st.subheader("运行配置")
     st.text_input("Ollama 地址", value=settings.ollama_base_url, disabled=True)
     st.text_input("默认模型", value=settings.default_model, disabled=True)
+    st.subheader("本地模型")
+    st.caption("点击检测后读取本机 Ollama 模型，不会自动访问网络。")
+    if "ollama_model_result" not in st.session_state:
+        st.session_state["ollama_model_result"] = None
+    if st.button("检测已安装模型", key="detect_ollama_models"):
+        with st.spinner("正在读取本机模型列表..."):
+            with OllamaClient(
+                settings.ollama_base_url,
+                timeout_seconds=settings.ollama_timeout_seconds,
+                temperature=settings.ollama_temperature,
+                max_output_tokens=settings.ollama_max_output_tokens,
+            ) as ollama:
+                st.session_state["ollama_model_result"] = ollama.list_models()
+
+    model_result = st.session_state["ollama_model_result"]
+    if model_result is None:
+        st.caption("尚未检测本机模型。")
+    elif not model_result.available:
+        st.error(f"模型服务不可用：{model_result.error_message}")
+    elif not model_result.models:
+        st.warning(model_result.error_message or "没有可用的生成模型。")
+    else:
+        model_names = [model.name for model in model_result.models]
+        default_index = model_names.index(settings.default_model) if settings.default_model in model_names else 0
+        selected_model = st.selectbox("分析模型", model_names, index=default_index)
+        st.session_state["selected_ollama_model"] = selected_model
+        st.caption(f"已发现 {len(model_names)} 个生成模型，embedding 模型已过滤。")
+        if st.button("测试本地模型", key="test_ollama_model"):
+            try:
+                with OllamaClient(
+                    settings.ollama_base_url,
+                    timeout_seconds=settings.ollama_timeout_seconds,
+                    temperature=settings.ollama_temperature,
+                    max_output_tokens=settings.ollama_max_output_tokens,
+                ) as ollama:
+                    chat_result = ollama.chat(
+                        selected_model,
+                        [{"role": "user", "content": "请用一句话说明数据分析助手的作用。"}],
+                    )
+            except OllamaClientError as exc:
+                st.error(f"模型调用失败：{exc.message}（错误码：{exc.code}）")
+            else:
+                st.success(f"{chat_result.model} 已响应，耗时 {chat_result.elapsed_ms} 毫秒。")
+                st.write(chat_result.content)
     st.subheader("查询限制")
     st.caption(f"最多返回 {settings.max_query_rows:,} 行")
     st.caption(f"结果不超过 {settings.max_query_result_mb} MB")
