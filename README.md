@@ -1,127 +1,123 @@
-# DataPilot：本地自然语言数据分析 Agent
+# DataPilot：本地自然语言数据分析助手
 
-> 当前版本：提供中文数据分析工作台、10 组练习数据、自然语言分析、图表和结果导出。
+DataPilot 是一个面向 CSV/XLSX 文件的本地 AI 数据分析工作台。用户上传表格后，可以直接使用中文提问，例如“哪个地区销售额最高？”或“谁没有出勤？”。系统先让本地模型理解问题，再通过受控工具查询数据，最后生成中文报告、图表和可下载结果。
 
-![DataPilot 首页运行截图](docs/screenshots/datapilot-home.png)
+项目重点是让模型负责“理解问题和制定计划”，让程序负责“校验计划、查询数据和生成真实结果”，避免模型直接编写并执行不受控制的代码或 SQL。
 
-> 截图说明：这是本地 Streamlit 首页截图，只用于证明页面可以打开；由于外置浏览器的系统文件选择器阻断了自动上传，本图不包含上传数据后的图表和报告。
+## 项目能力
 
-## 项目定位
+| 模块 | 功能 |
+| --- | --- |
+| 数据导入 | 支持 CSV、XLSX，处理常见编码并识别日期、数值和文本字段 |
+| 数据质量 | 展示行列数量、缺失值、重复行、重复标识、唯一值和数值范围 |
+| 中文分析 | 用自然语言描述分析目标，支持总览、分组统计、趋势、明细和异常分析 |
+| 本地模型 | 接入 Ollama，可检测、选择并测试本机生成模型 |
+| 安全查询 | 使用 Pydantic、字段白名单和 DuckDB，只允许查询当前上传的数据 |
+| 报告图表 | 生成中文分析报告，渲染柱状图、折线图和饼图 |
+| 结果导出 | 支持导出工具结果 CSV、图表 CSV、Markdown 报告和 PNG 图片 |
+| 练习数据 | 内置 10 组中文合成数据，共 20 个 CSV/XLSX 文件 |
 
-DataPilot 是面向中文电商经营数据的本地自然语言分析工作台。用户上传 CSV 或 XLSX 文件后，可以用中文提问，系统由本地 Ollama 模型生成结构化分析计划，再经过 Pydantic、字段白名单和只读 SQL 校验，按计划执行受控工具，并根据真实结果生成中文报告、图表和可下载文件。
+## 系统流程
 
-这个项目与作品集中的 LearningHub 不同：LearningHub 重点是中文文档的 Embedding 检索、来源约束问答和笔记管理；DataPilot 重点是结构化数据分析、Agent 工具调用、SQL 安全和结果可追溯。
+```mermaid
+flowchart LR
+    A[上传 CSV 或 XLSX] --> B[读取数据与质量检查]
+    B --> C[建立字段目录和临时数据表]
+    C --> D[输入中文分析问题]
+    D --> E[Ollama 本地模型识别意图]
+    E --> F[生成结构化分析计划]
+    F --> G{Pydantic 校验是否通过}
+    G -- 否 --> H[返回明确提示，不执行查询]
+    G -- 是 --> I[字段白名单与只读 SQL 校验]
+    I --> J{SQL 是否安全}
+    J -- 否 --> H
+    J -- 是 --> K[DuckDB 执行统计或查询]
+    K --> L[保存结构化结果与执行记录]
+    L --> M[本地模型根据真实结果生成报告]
+    M --> N[表格、图表与下载文件]
+```
 
-## 参考来源
+完整流程图文件见 [`docs/flowchart.md`](docs/flowchart.md)。
 
-本项目参考并改造：
-
-- [`Shubhamsaboo/awesome-llm-apps`](https://github.com/Shubhamsaboo/awesome-llm-apps)
-- 上游示例路径：`starter_ai_agents/ai_data_analysis_agent`
-
-参考项目使用 Streamlit、Agno、OpenAI 模型、DuckDB、Pandas，实现 CSV/Excel 上传和自然语言数据分析。本项目不会直接声称复刻项目已经完成，而是按计划逐步替换为中文业务样例、本地 Ollama、结构化计划、受控工具和测试验证。
-
-## 目标技术链路
+## 技术架构
 
 ```text
-中文问题
-  -> Ollama 本地模型生成 JSON 分析计划
-  -> Pydantic 校验工具和参数
-  -> 受控工具执行 DuckDB 只读查询或统计
-  -> 记录工具结果和数据证据
-  -> 本地模型生成中文报告
-  -> 表格、图表和 Markdown/CSV/PNG 导出
+Streamlit 页面
+    -> 数据加载与质量检查
+    -> OllamaClient：调用本地模型
+    -> QueryIntent / AnalysisPlan：约束问题理解和分析计划
+    -> Pydantic 参数校验
+    -> SQLGuard：只读 SQL 和数据源校验
+    -> DuckDB：执行当前上传数据的查询
+    -> Plotly：渲染结构化图表
+    -> Markdown / CSV / PNG：导出结果
 ```
 
-## 当前能力
+技术栈：Python、Streamlit、Ollama、Pandas、DuckDB、Pydantic、Plotly、openpyxl、unittest。
 
-- CSV/XLSX 文件读取、编码处理、列类型识别和输入限制。
-- 行列概览、字段类型、缺失值、重复值和异常值检查。
-- DuckDB 临时表和只读 SQL 查询。
-- 危险 SQL、多语句、未知表名和超限结果拦截。
-- 页面内置中文查询示例，可查看查询状态、耗时、返回行数和执行 SQL。
-- Pydantic 参数校验和工具执行记录。
-- 数据概览、分组统计、IQR 异常检测和柱状图/折线图/饼图结构化配置工具。
-- Ollama 本地模型发现、embedding 模型过滤、模型选择和真实聊天测试。
-- 结构化分析计划生成、Markdown/额外文本 JSON 提取、ASCII 字段别名映射和一次自动修复。
-- 计划通过 Pydantic、工具参数、字段白名单和 SQL 只读校验后才展示，校验失败不会执行工具。
-- 按已校验计划顺序执行数据概览、只读 SQL、分组统计、异常检测和图表配置工具，任一步失败会停止后续步骤。
-- 把成功工具结果作为唯一报告证据，使用本地 Ollama 生成中文报告；报告 JSON 不合格或模型不可用时只返回安全降级说明。
-- 使用 Plotly 渲染柱状图、折线图和饼图；图表只接收结构化 `ChartSpec`，不执行模型生成的 JavaScript。
-- 支持工具结果 CSV、图表 CSV、Markdown 报告和 PNG 导出；Plotly/Kaleido 失败时使用 Pillow 生成静态 PNG 并提示实际后端。
-- 提供覆盖总量、分组、趋势、异常、组合条件、图表、无关和不可回答问题的 20 条固定评估集，并按工具、字段、拒答状态和图表类型评分。
-- 记录 `qwen3:4b` 结构化计划不稳定、Kaleido PNG 导出失败、Ollama 服务异常、非法 SQL 拦截、报告引用校验和外置浏览器文件选择器限制，详见 [`docs/failure-cases.md`](docs/failure-cases.md)。
+## 一键启动
 
-## 当前暂不支持
+运行环境：Windows、Python 3.11 及以上、Ollama。
 
-- 云端 OpenAI API 默认调用。
-- 任意 Python 代码执行。
-- 任意写入型 SQL、真实企业数据库和生产数据接入。
-- 多用户权限、登录、分布式部署和实时数据同步。
-- 尚未实现的能力不会写入完成状态，也不会提前写入简历。
+首次使用前，请确认 Ollama 已安装。双击项目目录中的 `start_datapilot.bat`，脚本会自动完成以下工作：
 
-## 当前样例数据
+1. 创建 `.venv` 虚拟环境。
+2. 安装 `requirements.txt` 中的依赖。
+3. 检查 Ollama 服务；未启动时尝试启动。
+4. 检查并准备 `qwen2.5:3b` 模型。
+5. 启动 Streamlit 页面，并显示实际访问地址。
 
-`data/sample_ecommerce.csv` 和 `data/sample_ecommerce.xlsx` 是固定种子生成的合成订单数据，共 243 行、13 个字段。数据说明和质量场景记录在 [`data/README.md`](data/README.md)。
-
-## 练习数据
-
-`data/practice/` 中提供 10 组中文合成数据，每组同时包含 CSV 和 XLSX，共 20 个文件。页面的“练习数据中心”支持查看数据目录、预览前 10 行、下载两种格式并直接进入分析。
-
-练习主题包括：电商订单、商品库存、门店销售、广告投放、客户复购、物流时效、员工考勤、培训成绩、家庭收支和网站访问。
-
-重新生成练习文件：
+也可以在 PowerShell 中执行：
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\generate_practice_data.py
+.\start_datapilot.bat
 ```
 
-重新生成样例文件：
+启动后打开：
 
-```powershell
-.\.venv\Scripts\python.exe scripts\generate_sample_data.py
+```text
+http://127.0.0.1:8502
 ```
 
-## 开发计划
+如果 8502 端口已经被占用，脚本会自动选择下一个可用端口，并在终端显示地址。
 
-完整的阶段目标、文件产物、验收标准和禁止事项记录在：
+## 手动启动
 
-- [`DataPilot 项目严格执行计划`](https://github.com/san31415926/ai-application-portfolio-lab/blob/main/docs/datapilot-project-plan.md)
-- [`技术决策记录`](https://github.com/san31415926/ai-application-portfolio-lab/blob/main/docs/decision-log.md)
-
-开发顺序固定为：上游拆解 -> 项目骨架 -> 样例数据 -> 数据读取 -> 质量检查 -> SQL 安全 -> 工具 -> Ollama -> 结构化 Agent -> 报告和图表 -> 界面 -> 测试评估 -> 文档和面试复述。
-
-## 运行说明
-
-在项目目录中创建独立虚拟环境并安装依赖：
+如果不使用一键脚本，可以按以下步骤操作：
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
-```
-
-启动工作台：
-
-```powershell
-.\.venv\Scripts\python.exe -m streamlit run app.py
-```
-
-如果页面提示 Ollama 不可用，请先确认本机服务和模型：
-
-```powershell
 ollama serve
 ollama pull qwen2.5:3b
+.\.venv\Scripts\python.exe -m streamlit run app.py --server.port 8502
 ```
 
-页面侧边栏的“检测已安装模型”会读取本机模型列表；选择生成模型后可以点击“测试本地模型”验证真实调用。`embeddinggemma:300m` 只用于向量 embedding，不会进入生成模型选项。
+`embeddinggemma:300m` 仅用于向量 embedding，不会作为报告生成模型显示。DataPilot 的主要分析模型推荐使用 `qwen2.5:3b`。
 
-检查固定评估集结构：
+## 使用步骤
 
-```powershell
-.\.venv\Scripts\python.exe scripts\run_evaluation.py
-```
+1. 在“数据选择”中选择内置练习数据，或上传自己的 CSV/XLSX 文件。
+2. 查看数据概览和质量检查结果，确认字段是否被正确识别。
+3. 在侧边栏检测本地模型，选择生成模型并进行测试。
+4. 输入中文问题，例如：
 
-对模型输出评分时，使用 `--plans` 传入按 `case_id` 保存的结构化计划 JSON；评分只表示计划契约是否满足预期，不代表中文表达质量或业务预测准确率。
+   - 哪个地区的销售额最高？
+   - 各个渠道的订单数量是多少？
+   - 哪些商品库存低于安全库存？
+   - 谁没有出勤？
+
+5. 查看分析计划、工具执行结果、中文报告和图表。
+6. 根据需要下载 CSV、Markdown 或 PNG 结果。
+
+## 测试结果
+
+当前测试和代码检查结果：
+
+- `83` 个 unittest 全部通过。
+- `compileall` Python 语法检查通过。
+- `git diff --check` 格式检查通过。
+- 覆盖数据加载、CSV/XLSX 解析、数据质量、意图识别、计划校验、只读 SQL、工具执行、图表、导出、Ollama 客户端和 Streamlit 页面流程。
 
 运行测试：
 
@@ -129,10 +125,56 @@ ollama pull qwen2.5:3b
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
 
-阶段 2 已验证：依赖可以安装和导入，配置测试 3 项通过，Python 语法检查通过，Streamlit 健康检查返回 `200 ok`。阶段 3 已验证：固定种子可复现，CSV/XLSX 内容一致，样例数据测试 3 项通过。阶段 4 已验证：完整测试集 14 项通过，支持 UTF-8/GBK 类编码、CSV/XLSX、表头清洗、日期/数值/文本类型识别、原始值保留和转换失败行记录；页面加载错误只显示中文原因。阶段 5 已验证：页面增加行列概览、缺失单元格、重复行、重复标识、字段角色、唯一值和数值范围展示；样例数据质量报告识别出 2 个缺失单元格、1 行重复记录和 1 个重复标识。阶段 6 已验证：新增 DuckDB 只读查询引擎、SQL 校验、查询超时、最大行数和结果大小限制，并接入中文工作台；完整测试集 30 项通过，包含上传 CSV 后执行默认查询的页面流程测试。阶段 7 已验证：新增 Pydantic 工具输入/输出模型、工具字段白名单、IQR 异常检测、分组统计、数据概览、图表结构化配置和工具执行记录；完整测试集 37 项通过。阶段 8 已验证：新增 Ollama HTTP 客户端、生成模型过滤、超时和错误码处理，并接入侧边栏模型检测和真实测试按钮；完整测试集 42 项通过。本机真实验收发现 3 个生成模型，`qwen2.5:3b` 成功返回模型回答。阶段 9 已验证：新增结构化分析计划模型、JSON/代码块解析、ASCII 字段别名映射、工具参数和 SQL 只读校验、一次自动修复以及 `think=false` 计划请求；完整测试集 53 项通过，`compileall` 和 `git diff --check` 通过。`qwen2.5:3b` 在低温度结构化请求下连续生成合法计划，失败计划仍会被拦截。阶段 10 已验证：新增计划二次校验执行、工具执行记录、成功证据裁剪、中文报告 JSON 校验和安全降级；完整测试集 62 项通过，`compileall` 和 `git diff --check` 通过。真实 Streamlit 页面完成“检测模型 -> 上传样例 CSV -> 生成计划 -> 执行分组统计 -> 生成中文报告”链路，无异常。`qwen3:4b` 已列入可选模型，但当前计划输出稳定性不足，不作为阶段 10 的稳定验收模型。
+运行固定评估集结构检查：
 
-阶段 11 已验证：新增结构化 Plotly 图表渲染、CSV/Markdown/PNG 导出、Pillow PNG 降级、20 条固定中文评估集和边界测试；完整测试集 72 项通过，`compileall` 和 `git diff --check` 通过，Streamlit 健康检查返回 `200 ok`。固定评估集结构检查脚本已通过。
+```powershell
+.\.venv\Scripts\python.exe scripts\run_evaluation.py
+```
 
-练习数据验收：新增 10 组固定种子的中文 CSV/XLSX 数据，共 20 个文件；页面支持数据目录、预览、下载和直接分析；完整测试集 76 项通过，`compileall` 通过。
+## 常见问题
 
-已知限制：当前 Windows 环境中 Plotly 5.24.1 调用 Kaleido 0.2.1 仍可能出现启动错误；系统会捕获该失败并使用 Pillow 生成有效 PNG，同时提示用户实际使用的后端。不能把所有环境都表述为 Plotly 原生 PNG 导出稳定可用。
+### 1. 页面可以打开，但提示本地模型不可用
+
+确认 Ollama 服务正在运行，并检查模型是否已经安装：
+
+```powershell
+ollama serve
+ollama list
+ollama pull qwen2.5:3b
+```
+
+### 2. 为什么不能让模型直接执行任意 SQL？
+
+模型只负责生成结构化分析计划。程序会先校验字段、工具参数、表名和 SQL 类型，只允许对当前上传的数据执行单条只读查询，避免修改数据或访问外部数据源。
+
+### 3. 为什么有些问题没有结果？
+
+可能是当前文件没有对应字段、筛选条件没有匹配记录，或问题超出了当前数据的内容。请先查看“字段详情”和“数据样例”，再根据实际字段重新提问。系统不会在没有数据证据时编造结果。
+
+### 4. 为什么 `qwen3:4b` 的结果不如 `qwen2.5:3b` 稳定？
+
+不同本地模型对结构化 JSON 输出的稳定性不同。当前项目默认使用 `qwen2.5:3b` 完成分析计划和报告生成，其他模型可以在页面中测试后再使用。
+
+### 5. 项目会把上传的数据发送到云端吗？
+
+不会。数据读取、查询和模型调用默认在本机完成，示例文件也全部是固定种子生成的合成数据，不包含真实企业数据。
+
+### 6. 项目支持修改原始数据吗？
+
+不支持。当前版本只做数据读取、统计、分析和结果导出，不执行写入型 SQL，也不修改上传文件。
+
+## 数据说明
+
+`data/sample_ecommerce.csv` 和 `data/sample_ecommerce.xlsx` 是固定种子生成的合成电商订单数据，共 243 行、13 个字段。
+
+`data/practice/` 提供 10 组中文练习数据，每组同时包含 CSV 和 XLSX，主题包括电商订单、商品库存、门店销售、广告投放、客户复购、物流时效、员工考勤、培训成绩、家庭收支和网站访问。
+
+重新生成练习数据：
+
+```powershell
+.\.venv\Scripts\python.exe scripts\generate_practice_data.py
+```
+
+## 项目边界
+
+当前版本定位为本地可运行原型，暂不包含登录、多用户权限、分布式部署、实时数据库同步和云端模型服务。项目中的示例数据仅用于功能演示和测试验证。
