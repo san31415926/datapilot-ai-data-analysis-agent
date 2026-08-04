@@ -555,6 +555,7 @@ else:
                     if step.status == "success":
                         if step.result.get("rows"):
                             rows = step.result["rows"]
+                            st.caption(f"已找到 {len(rows):,} 条记录")
                             st.dataframe(
                                 pd.DataFrame(rows),
                                 use_container_width=True,
@@ -567,6 +568,8 @@ else:
                                 mime="text/csv",
                                 key=f"download_step_csv_{step.step_index}",
                             )
+                        elif isinstance(step.result.get("rows"), list):
+                            st.info("查询已执行，但没有找到符合条件的记录。可以换一种说法，或检查筛选条件。")
                         elif step.result.get("overview"):
                             st.json(step.result["overview"])
                         elif step.result.get("chart"):

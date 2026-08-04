@@ -150,6 +150,51 @@ class QueryIntentTestCase(unittest.TestCase):
         finally:
             engine.close()
 
+    def test_attendance_question_builds_filtered_detail_plan(self) -> None:
+        schema = [
+            {"name": "员工编号", "logical_type": "text", "role": "category", "sample_values": ["EMP-0001"]},
+            {"name": "部门", "logical_type": "text", "role": "category", "sample_values": ["销售部"]},
+            {"name": "日期", "logical_type": "date", "role": "category", "sample_values": ["2025-06-17"]},
+            {"name": "出勤状态", "logical_type": "text", "role": "category", "sample_values": ["请假", "正常"]},
+        ]
+        client = FakeIntentClient(
+            '{"user_goal":"谁没上班","intent_type":"unknown",'
+            '"dimensions":[],"measures":[],"aggregation":"unknown",'
+            '"filters":[],"calculation":""}'
+        )
+        intent_result = QueryIntentAnalyzer(client, "qwen2.5:3b").analyze("谁没上班", schema)
+        self.assertTrue(intent_result.success)
+        self.assertEqual(intent_result.intent.filters, ["column_3 != 正常"])
+        self.assertEqual(intent_result.intent.calculation, "筛选出勤状态")
+
+        engine = ReadOnlyQueryEngine(
+            pd.DataFrame(
+                {
+                    "员工编号": ["EMP-0001", "EMP-0002", "EMP-0003"],
+                    "部门": ["销售部", "产品部", "财务部"],
+                    "日期": ["2025-06-17", "2025-06-25", "2025-06-11"],
+                    "出勤状态": ["请假", "正常", "缺勤"],
+                }
+            ),
+            max_rows=100,
+            max_result_bytes=100_000,
+            timeout_seconds=2,
+        )
+        try:
+            result = StructuredPlanner(client, "qwen2.5:3b").create_plan(
+                "谁没上班",
+                engine,
+                schema,
+                intent=intent_result.intent,
+            )
+            self.assertTrue(result.success)
+            self.assertEqual(len(client.calls), 1)
+            response = engine.execute(result.plan.steps[0].parameters["sql"])
+            self.assertTrue(response.success)
+            self.assertEqual(response.dataframe["出勤状态"].tolist(), ["请假", "缺勤"])
+        finally:
+            engine.close()
+
 
 if __name__ == "__main__":
     unittest.main()

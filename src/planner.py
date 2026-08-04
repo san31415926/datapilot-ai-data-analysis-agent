@@ -487,6 +487,29 @@ def _build_plan_from_intent(intent: Mapping[str, Any]) -> AnalysisPlan | None:
     filters = [str(value) for value in intent.get("filters") or [] if str(value).strip()]
     aggregation = str(intent.get("aggregation") or "unknown")
     calculation = str(intent.get("calculation") or "")
+    if calculation == "筛选出勤状态" and filters:
+        condition = _parse_controlled_filter(filters[0])
+        if condition is not None:
+            field, operator, value = condition
+            selected_fields = list(dict.fromkeys([*dimensions, field]))
+            select_sql = ", ".join(selected_fields) or "*"
+            escaped_value = value.replace("'", "''")
+            sql = (
+                f"SELECT {select_sql} FROM uploaded_data "
+                f"WHERE {field} {operator} '{escaped_value}' LIMIT 50"
+            )
+            return AnalysisPlan(
+                user_goal=str(intent.get("user_goal") or "查询出勤状态"),
+                steps=[
+                    AnalysisStep(
+                        tool="run_readonly_sql",
+                        parameters={"sql": sql},
+                        expected_output="返回符合出勤状态条件的人员记录",
+                    )
+                ],
+                report_focus=["人员记录", "出勤状态"],
+            )
+
     if filters or len(dimensions) > 2:
         return None
 
@@ -551,3 +574,16 @@ def _build_plan_from_intent(intent: Mapping[str, Any]) -> AnalysisPlan | None:
             report_focus=[str(intent.get("user_goal") or "汇总结果")],
         )
     return None
+
+
+def _parse_controlled_filter(value: str) -> tuple[str, str, str] | None:
+    """只接受意图模块生成的单字段等值筛选，避免模型拼接任意 SQL。"""
+
+    match = re.fullmatch(r"\s*(column_\d+)\s*(==|!=|=)\s*(.+?)\s*", str(value))
+    if not match:
+        return None
+    operator = "=" if match.group(2) in {"==", "="} else "<>"
+    literal = match.group(3).strip().strip("'\"")
+    if not literal or len(literal) > 80:
+        return None
+    return match.group(1), operator, literal

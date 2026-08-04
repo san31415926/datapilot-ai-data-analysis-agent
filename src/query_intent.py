@@ -60,6 +60,7 @@ intent_type 只能是 overview、group_summary、trend、detail、anomaly、unkn
 aggregation 只能是 count、sum、avg、min、max、unknown。
 用户说“赚多少钱、利润、盈利、净赚”时，如果字段中同时存在销售额或收入与成本，measures 应同时选择这两个字段，calculation 写成“销售额减成本”；后续系统会用只读查询计算。
 用户说收入、营收、流水、销售金额时，优先匹配销售额或收入字段；用户说销量、件数时，优先匹配数量字段。
+用户说“谁没上班、谁没有出勤、哪些人请假、谁缺勤”时，如果字段中存在员工、日期、出勤状态，优先识别为明细查询；filters 使用“状态字段 != 正常”或对应状态值，calculation 写成“筛选出勤状态”。
 没有足够字段支持的问题，返回空数组，不要猜测。"""
 
 
@@ -200,6 +201,11 @@ def normalize_intent_fields(
     payload = parsed.model_dump()
     payload["dimensions"] = resolve_many(parsed.dimensions)
     payload["measures"] = resolve_many(parsed.measures)
+    payload["filters"] = [
+        _normalize_filter_reference(value, aliases, schema)
+        for value in parsed.filters
+        if str(value).strip()
+    ]
 
     # “能赚多少钱”通常没有名为“利润”的原始列，自动转换为收入/销售额减成本。
     intent_text = question or parsed.user_goal
@@ -213,6 +219,10 @@ def normalize_intent_fields(
             if not _contains_dimension_words(intent_text):
                 payload["dimensions"] = []
 
+    attendance = infer_attendance_intent(intent_text, schema)
+    if attendance is not None:
+        payload.update(attendance.model_dump())
+
     return QueryIntent.model_validate(payload)
 
 
@@ -223,6 +233,10 @@ def infer_rule_based_intent(
     """为小模型输出异常时提供可解释的常见中文查询兜底。"""
 
     text = question.strip()
+    attendance = infer_attendance_intent(text, schema)
+    if attendance is not None:
+        return attendance
+
     if _contains_profit_words(text):
         revenue = _find_field_by_terms(schema, ("销售额", "收入", "营收", "营业额", "流水"))
         cost = _find_field_by_terms(schema, ("成本", "费用", "支出", "花费"))
@@ -250,6 +264,8 @@ def infer_rule_based_intent(
 
 
 def _needs_rule_fallback(question: str, intent: QueryIntent) -> bool:
+    if _contains_attendance_words(question):
+        return not intent.calculation.startswith("筛选出勤状态") or not intent.filters
     if _contains_profit_words(question):
         return intent.calculation != "销售额减成本" or len(intent.measures) < 2
     return len(intent.dimensions) > 2 or len(intent.measures) > 3
@@ -285,8 +301,86 @@ def _find_measure_field(question: str, schema: Sequence[dict[str, Any]]) -> str 
     return None
 
 
+def infer_attendance_intent(
+    question: str,
+    schema: Sequence[dict[str, Any]],
+) -> QueryIntent | None:
+    """把常见的考勤自然表达转换为受控的状态筛选意图。"""
+
+    if not _contains_attendance_words(question):
+        return None
+    status = _find_field_by_terms(schema, ("出勤状态", "考勤状态", "是否出勤", "状态"))
+    if not status:
+        return None
+
+    person = _find_field_by_terms(schema, ("员工编号", "工号", "员工", "姓名", "人员"))
+    date = _find_field_by_terms(schema, ("日期", "时间", "打卡日期"))
+    department = _find_field_by_terms(schema, ("部门", "科室", "组织"))
+    dimensions = [field for field in (person, date, status) if field]
+    if "部门" in question or "哪个部门" in question:
+        dimensions = [field for field in (department, status, date) if field]
+    if not dimensions:
+        return None
+
+    operator, expected = _attendance_condition(question, schema, status)
+    return QueryIntent(
+        user_goal=question.strip(),
+        intent_type="detail",
+        dimensions=dimensions[:3],
+        aggregation="unknown",
+        filters=[f"{status} {operator} {expected}"],
+        calculation="筛选出勤状态",
+    )
+
+
+def _attendance_condition(
+    question: str,
+    schema: Sequence[dict[str, Any]],
+    status_field: str,
+) -> tuple[str, str]:
+    values: list[str] = []
+    for index, field in enumerate(schema):
+        if f"column_{index}" != status_field:
+            continue
+        values = [str(value) for value in field.get("sample_values") or []]
+        break
+
+    if any(word in question for word in ("请假", "休假")):
+        return "=", "请假"
+    for value in values:
+        if value and value != "正常" and value in question:
+            return "=", value
+    if any(word in question for word in ("上班了", "已上班", "正常出勤", "出勤正常")):
+        return "=", "正常"
+    return "!=", "正常"
+
+
 def _contains_dimension_words(value: str) -> bool:
     return any(word in value for word in ("按地区", "按区域", "按渠道", "按平台", "按类别", "各地区", "各渠道"))
+
+
+def _contains_attendance_words(value: str) -> bool:
+    return any(
+        word in value
+        for word in (
+            "没上班",
+            "没有上班",
+            "未上班",
+            "没出勤",
+            "没有出勤",
+            "未出勤",
+            "缺勤",
+            "旷工",
+            "请假",
+            "休假",
+            "不在岗",
+            "未到岗",
+            "上班了",
+            "已上班",
+            "正常出勤",
+            "出勤正常",
+        )
+    )
 
 
 def _build_aliases(schema: Sequence[dict[str, Any]]) -> dict[str, str]:
@@ -336,6 +430,23 @@ def _resolve_field(token: str, aliases: dict[str, str], schema: Sequence[dict[st
             best_score = score
             best_key = f"column_{index}"
     return best_key if best_score >= 0.72 else None
+
+
+def _normalize_filter_reference(
+    value: str,
+    aliases: dict[str, str],
+    schema: Sequence[dict[str, Any]],
+) -> str:
+    """只归一化筛选条件左侧字段，右侧值仍由意图规则控制。"""
+
+    text = str(value).strip()
+    match = re.match(r"^(.+?)\s*(==|!=|>=|<=|=|>|<)\s*(.+)$", text)
+    if not match:
+        return text
+    field = _resolve_field(match.group(1), aliases, schema)
+    if not field:
+        return text
+    return f"{field} {match.group(2)} {match.group(3).strip()}"
 
 
 def _find_field_by_terms(schema: Sequence[dict[str, Any]], terms: Sequence[str]) -> str | None:
